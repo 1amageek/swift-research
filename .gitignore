@@ -1,0 +1,45 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Xcode
+xcuserdata/
+*.xccheckout
+*.moved-aside
+*.xcuserstate
+*.xcscmblueprint
+DerivedData/
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/
+Package.resolved
+
+# CocoaPods (if used)
+Pods/
+
+# Carthage (if used)
+Carthage/Build/
+
+# IDE
+*.xcodeproj/**/xcuserdata/
+*.xcworkspace/**/xcuserdata/
+*.playground/**/xcuserdata/
+
+# Secrets / credentials
+.netrc
+*.pem
+*.p12
+*.key
+
+# Misc
+*.log
+*.tmp
+*~
