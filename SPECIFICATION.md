@@ -1,63 +1,54 @@
-# Agentic Crawler 仕様書
+# SwiftResearch 仕様書
 
 ## 概要
 
-Agentic Crawlerは、SwiftAgentフレームワークを使用したAI駆動のWebクローラーです。Ollamaを使用してページコンテンツを分析し、**セマンティック充足度判定**によって情報収集の完了を判断します。固定の最大ページ数や深度制限を使用せず、LLMが目的に対して十分な情報が集まったかを評価します。
+SwiftResearchは、SwiftAgentフレームワークを使用したAI駆動のリサーチツールです。Ollamaを使用してページコンテンツを分析し、**セマンティック充足度判定**によって情報収集の完了を判断します。5フェーズ構成で目的分析から最終レポート生成まで自動化します。
 
 ## 使用ライブラリ
 
 | ライブラリ | 役割 |
 |-----------|------|
 | **SwiftAgent** | エージェントフレームワーク。Step-based設計の基盤 |
-| **Selenops** | Webクローリングの基盤（CrawlerDelegate） |
-| **Remark** | 全てのWebアクセス。HTML→Markdown変換 |
-| **OpenFoundationModels-Ollama** | LLM分析（コンテンツ理解・リンク優先度決定・充足度判定） |
+| **Selenops** | Webクローリングの基盤 |
+| **RemarkKit** | 全てのWebアクセス。HTML→Markdown変換、リンク抽出 |
+| **OpenFoundationModels-Ollama** | LLM分析（@Generableによる構造化出力） |
 
 ## アーキテクチャ
 
-### 全体構成
+### 5フェーズ構成
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        AgenticCrawler                                │
+│                    SearchOrchestratorStep                           │
 │                                                                      │
+│  Phase 0: INPUT                                                     │
+│       ↓                                                             │
+│  Phase 1: OBJECTIVE ANALYSIS (目的分析)                             │
+│       - キーワード生成                                               │
+│       - ソクラテス的質問分解                                         │
+│       - 成功基準設定                                                 │
+│       ↓                                                             │
+│  Phase 2-4 ループ                                                   │
 │  ┌────────────────────────────────────────────────────────────────┐ │
-│  │                  SearchOrchestratorStep                         │ │
-│  │                                                                  │ │
-│  │  目的 (objective)                                               │ │
-│  │       ↓                                                         │ │
-│  │  1. キーワード生成 (Ollama)                                     │ │
-│  │       ↓                                                         │ │
-│  │  2. キーワードごとに SearchStep → DeepCrawlStep                 │ │
-│  │       ↓                                                         │ │
-│  │  3. 充足度チェック (Ollama)                                     │ │
-│  │       ↓ 不十分なら追加キーワードで繰り返し                       │ │
-│  │  4. 最終サマリー生成                                            │ │
-│  │       ↓                                                         │ │
-│  │  AggregatedResult                                               │ │
+│  │  Phase 2: SEARCH (検索)                                        │ │
+│  │       - キーワードで検索エンジン検索                             │ │
+│  │       - URL一覧取得                                             │ │
+│  │       ↓                                                        │ │
+│  │  Phase 3: CONTENT REVIEW (コンテンツレビュー)                   │ │
+│  │       - 各URLをフェッチ                                         │ │
+│  │       - LLMで関連性判定・情報抽出                               │ │
+│  │       - 深掘り（DeepCrawl）                                     │ │
+│  │       ↓                                                        │ │
+│  │  Phase 4: SUFFICIENCY CHECK (充足度チェック)                    │ │
+│  │       - 十分 → ループ終了                                       │ │
+│  │       - 不十分 → 追加キーワードで継続                           │ │
+│  │       - 諦め → ループ終了                                       │ │
 │  └────────────────────────────────────────────────────────────────┘ │
-│                                                                      │
-│  ┌────────────────────┐       ┌────────────────────────────────┐   │
-│  │     SearchStep     │       │       DeepCrawlStep            │   │
-│  │                    │       │                                │   │
-│  │  Keyword (文字列)  │       │  URL + Objective               │   │
-│  │       ↓            │       │       ↓                        │   │
-│  │  検索エンジン       │ ────→ │  ページフェッチ + Ollama分析    │   │
-│  │       ↓            │       │       ↓                        │   │
-│  │  [URLs]            │       │  関連リンクを深掘り             │   │
-│  │                    │       │       ↓                        │   │
-│  │  (Remark使用)      │       │  DeepCrawlResult               │   │
-│  └────────────────────┘       └────────────────────────────────┘   │
-│                                                                      │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                 CrawlCandidateStack                           │   │
-│  │           (優先度付きクロール候補スタック)                      │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                                                                      │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                    MemoryStorage                              │   │
-│  │              (収集したコンテンツの一時保存)                     │   │
-│  └──────────────────────────────────────────────────────────────┘   │
+│       ↓                                                             │
+│  Phase 5: RESPONSE BUILDING (応答構築)                              │
+│       - 収集情報から最終レポート生成                                 │
+│       ↓                                                             │
+│  AggregatedResult                                                   │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -65,7 +56,7 @@ Agentic Crawlerは、SwiftAgentフレームワークを使用したAI駆動のWe
 
 #### 1. SearchOrchestratorStep
 
-目的からキーワード生成、検索、クロール、充足度判定までをオーケストレーションするメインStep。
+5フェーズを統括するメインStep。
 
 ```swift
 public struct SearchOrchestratorStep: Step, Sendable {
@@ -75,15 +66,9 @@ public struct SearchOrchestratorStep: Step, Sendable {
 
 public struct SearchQuery: Sendable {
     let objective: String        // 調査目的
-    let maxVisitedURLs: Int      // 訪問URL数の上限（セーフティリミット、デフォルト: 50）
+    let maxVisitedURLs: Int      // 訪問URL数の上限（セーフティリミット、デフォルト: 100）
 }
 ```
-
-**処理フロー:**
-1. 目的からキーワードを生成（Ollama - 必要な数だけ自動生成）
-2. キーワードごとに検索・DeepCrawl（検索結果は全て取得）
-3. 充足度チェック（Ollama）- 不十分なら追加キーワードで継続
-4. 最終サマリー生成
 
 #### 2. SearchStep
 
@@ -105,55 +90,7 @@ public struct KeywordSearchInput: Sendable {
 - ユーザー指定のブロックリスト対応
 - HTTPSのみ許可
 
-#### 3. DeepCrawlStep
-
-1つのURLから関連リンクを深掘りクロールするStep。
-
-```swift
-public struct DeepCrawlStep: Step, Sendable {
-    typealias Input = DeepCrawlInput
-    typealias Output = DeepCrawlResult
-}
-
-public struct DeepCrawlInput: Sendable {
-    let url: URL
-    let objective: String
-    let missingInformation: [String]  // 不足情報（優先リンク選択に活用）
-}
-```
-
-**処理フロー:**
-1. 初期URLをフェッチして分析
-2. 関連度チェック（0.4未満は無関係として早期終了）
-3. 関連コンテンツを保存
-4. 優先リンクをスタックに追加
-5. スタックが空になるまで深掘り継続
-
-#### 4. AgenticCrawlerDelegate
-
-Ollamaを使用してコンテンツ分析・リンク優先度決定を行うCrawlerDelegate。
-
-```swift
-public actor AgenticCrawlerDelegate: CrawlerDelegate {
-    // 統合された訪問記録メソッド
-    public func recordVisit(url: URL)
-
-    // Remarkインスタンスを直接処理
-    public func processRemark(_ remark: Remark, at url: URL) async
-
-    // ステータス取得
-    public func getStatus() -> CrawlerStatus
-}
-
-public struct CrawlerStatus: Sendable {
-    let pagesVisited: Int    // 訪問したページ数
-    let pagesSaved: Int      // 保存したページ数（関連コンテンツのみ）
-    let isComplete: Bool
-    let elapsedTime: TimeInterval
-}
-```
-
-#### 5. CrawlCandidateStack
+#### 3. CrawlCandidateStack
 
 優先度付きクロール候補を管理するActor。
 
@@ -163,21 +100,29 @@ public actor CrawlCandidateStack {
     func push(_ candidates: [CrawlCandidate])
     func pop() -> CrawlCandidate?
     func pop(count: Int) -> [CrawlCandidate]
+    func peek(count: Int) -> [CrawlCandidate]
+    func contains(_ url: URL) -> Bool
     var count: Int { get async }
+    var isEmpty: Bool { get async }
+    func clear()
 }
 ```
 
-#### 6. ContentInsight
+#### 4. MemoryStorage
 
-Ollamaによるページ分析結果。
+インメモリでクロール結果を保存するActor。
 
 ```swift
-public struct ContentInsight: Sendable {
-    let url: URL
-    let summary: String              // ページの要約
-    let relevanceScore: Double       // 目的との関連度（0.0〜1.0）
-    let keyFindings: [String]        // 主要な発見
-    let nextCandidates: [CrawlCandidate]  // 次にクロールすべき候補
+public actor MemoryStorage {
+    func store(_ content: CrawledContent)
+    func store(_ newContents: [CrawledContent])
+    func get(by id: UUID) -> CrawledContent?
+    func get(by url: URL) -> CrawledContent?
+    func getAll() -> [CrawledContent]
+    func hasVisited(_ url: URL) -> Bool
+    func markAsVisited(_ url: URL)
+    var count: Int { get async }
+    var visitedCount: Int { get async }
 }
 ```
 
@@ -192,6 +137,7 @@ public struct CrawlCandidate: Sendable, Comparable {
     let title: String?
     let reason: String?        // スコアの理由
     let sourceURL: URL?        // このリンクを発見したページ
+    let addedAt: Date
 }
 ```
 
@@ -207,143 +153,112 @@ public struct CrawledContent: Identifiable, Sendable {
     let links: [ExtractedLink]
     let crawledAt: Date
 }
+
+public struct ExtractedLink: Sendable, Hashable {
+    let url: String
+    let text: String?
+}
+```
+
+### ReviewedContent
+
+```swift
+public struct ReviewedContent: Sendable {
+    let url: URL
+    let title: String?
+    let extractedInfo: String  // 抽出した関連情報
+    let isRelevant: Bool
+}
 ```
 
 ### 統計情報
 
 ```swift
-// DeepCrawl統計
-public struct DeepCrawlStatistics: Sendable {
-    let pagesVisited: Int   // 訪問したページ数
-    let pagesSaved: Int     // 保存したページ数（関連コンテンツのみ）
-    let linksFound: Int
-    let duration: Duration
-}
-
-// 集約統計
 public struct AggregatedStatistics: Sendable {
     let totalPagesVisited: Int   // 訪問したページ総数
-    let totalPagesSaved: Int     // 保存したページ総数
-    let irrelevantURLsSkipped: Int
+    let relevantPagesFound: Int  // 関連コンテンツ数
     let keywordsUsed: Int
     let duration: Duration
 }
 ```
 
-## 処理フロー
+### 出力結果
 
-### 1. オーケストレーションフェーズ (SearchOrchestratorStep)
-
-```
-入力: SearchQuery(objective: "Swift Concurrencyのベストプラクティス")
-  ↓
-1. キーワード生成 (Ollama)
-   → ["Swift Concurrency best practices", "async await patterns", ...]
-  ↓
-2. キーワードごとに処理
-   ┌─ ループ ──────────────────────────────────────────┐
-   │  a. SearchStep: キーワード → URL一覧              │
-   │  b. DeepCrawlStep: 各URLを並列で深掘り            │
-   │  c. 結果を集約                                    │
-   │  d. 充足度チェック (Ollama)                       │
-   │     - 十分 → ループ終了                           │
-   │     - 不十分 → 不足情報と追加キーワードを取得      │
-   └──────────────────────────────────────────────────┘
-  ↓
-3. 最終サマリー生成 (Ollama)
-  ↓
-出力: AggregatedResult
+```swift
+public struct AggregatedResult: Sendable {
+    let objective: String
+    let questions: [String]                 // ソクラテス的質問
+    let successCriteria: [String]           // 充足判定条件
+    let reviewedContents: [ReviewedContent] // レビュー済みコンテンツ
+    let responseMarkdown: String            // 最終応答
+    let keywordsUsed: [String]
+    let statistics: AggregatedStatistics
+}
 ```
 
-### 2. 検索フェーズ (SearchStep)
+## LLMレスポンスモデル（@Generable）
 
-```
-入力: KeywordSearchInput(keyword: "Swift Concurrency")
-  ↓
-検索エンジンURL生成 (DuckDuckGo/Google/Bing)
-  ↓
-Remark.fetch() → Markdown取得
-  ↓
-extractLinks() → リンク抽出
-  ↓
-フィルタリング:
-  - 検索エンジン内部リンク除外
-  - ブロックリスト除外
-  - HTTPSのみ
-  - 重複除去
-  ↓
-出力: [URL1, URL2, URL3, ...]
+### Phase 1: ObjectiveAnalysisResponse
+
+```swift
+@Generable
+public struct ObjectiveAnalysisResponse: Sendable {
+    let keywords: [String]        // 検索キーワード
+    let questions: [String]       // ソクラテス的質問
+    let successCriteria: [String] // 成功基準
+}
 ```
 
-### 3. 深掘りフェーズ (DeepCrawlStep)
+### Phase 3: ContentReviewResponse
 
-```
-入力: DeepCrawlInput(url: URL, objective: "...")
-  ↓
-1. 初期URLをフェッチ (Remark)
-  ↓
-2. Ollamaでコンテンツ分析
-   - 関連度スコア
-   - 要約
-   - 優先リンク
-  ↓
-3. 関連度チェック (閾値: 0.4)
-   - < 0.4: 無関係として終了（保存しない）
-   - >= 0.4: コンテンツを保存、優先リンクをスタックに追加
-  ↓
-4. 深掘りループ
-   ┌─ スタックが空になるまで ─────────────────────┐
-   │  a. スタックから候補を取得                    │
-   │  b. フェッチ + 分析                          │
-   │  c. 関連度 >= 0.4 なら保存 + リンク追加       │
-   └─────────────────────────────────────────────┘
-  ↓
-出力: DeepCrawlResult
+```swift
+@Generable
+public struct ContentReviewResponse: Sendable {
+    let isRelevant: Bool
+    let extractedInfo: String
+    let shouldDeepCrawl: Bool
+    let priorityLinks: [PriorityLink]
+}
+
+@Generable
+public struct PriorityLink: Sendable {
+    let index: Int      // リンクのインデックス（1始まり）
+    let score: Double   // 関連度スコア
+    let reason: String
+}
 ```
 
-### 4. 充足度判定 (Ollama)
+### Phase 3.5: DeepCrawlReviewResponse
 
-```
-プロンプト:
-┌────────────────────────────────────────────────┐
-│ 調査目的: {objective}                           │
-│                                                 │
-│ これまでに収集した情報:                          │
-│ 【ソース1】要約: ... 発見: ...                  │
-│ 【ソース2】要約: ... 発見: ...                  │
-│ ...                                             │
-│                                                 │
-│ 判断してください:                                │
-│ - isSufficient: 十分な情報があるか              │
-│ - missingInformation: 不足している情報          │
-│ - suggestedKeywords: 追加検索キーワード         │
-└────────────────────────────────────────────────┘
+```swift
+@Generable
+public struct DeepCrawlReviewResponse: Sendable {
+    let isRelevant: Bool
+    let extractedInfo: String
+    let shouldContinue: Bool  // 深掘り続行判断
+    let reason: String
+}
 ```
 
-### 5. Ollamaコンテンツ分析
+### Phase 4: SufficiencyCheckResponse
 
+```swift
+@Generable
+public struct SufficiencyCheckResponse: Sendable {
+    let isSufficient: Bool
+    let shouldGiveUp: Bool
+    let additionalKeywords: [String]
+    let reasonMarkdown: String
+}
 ```
-プロンプト:
-┌────────────────────────────────────────────────┐
-│ 調査目的: {objective}                           │
-│ 不足情報: {missingInformation}（あれば）        │
-│                                                 │
-│ 現在のページ:                                    │
-│ - タイトル: {title}                              │
-│ - URL: {url}                                    │
-│ - 内容: {markdown(5000文字まで)}                 │
-│                                                 │
-│ 発見されたリンク:                                │
-│ [1] {link1.text} -> {link1.url}                │
-│ [2] {link2.text} -> {link2.url}                │
-│ ...                                             │
-│                                                 │
-│ 評価基準:                                        │
-│ - 0.8〜1.0: 目的に直接答える具体的情報           │
-│ - 0.5〜0.7: 関連する補足情報                     │
-│ - 0.3〜0.4: わずかに触れているだけ               │
-│ - 0.0〜0.2: 目的に答える情報がない               │
-└────────────────────────────────────────────────┘
+
+### Phase 5: FinalResponseBuildingResponse
+
+```swift
+@Generable
+public struct FinalResponseBuildingResponse: Sendable {
+    let responseMarkdown: String
+}
 ```
 
 ## 設定オプション
@@ -351,71 +266,101 @@ extractLinks() → リンク抽出
 ```swift
 public struct CrawlerConfiguration: Sendable {
     let searchEngine: SearchEngine      // .duckDuckGo, .google, .bing
+    let maxSearchResults: Int           // デフォルト: 5
     let requestDelay: Duration          // デフォルト: .milliseconds(500)
-    let ollamaModel: String             // デフォルト: "llama3.2"
-    let ollamaBaseURL: URL              // デフォルト: http://localhost:11434
+    let modelName: String               // デフォルト: "gpt-oss:20b"
+    let baseURL: URL                    // デフォルト: http://127.0.0.1:11434
+    let timeout: TimeInterval           // デフォルト: 300.0
     let allowedDomains: [String]?       // nilの場合は制限なし
     let blockedDomains: [String]        // デフォルト: []
 }
 ```
-
-**注意:** `maxDepth`と`maxPages`は削除されました。クロールの終了はLLMによるセマンティック充足度判定で決定されます。
 
 ## CLI インターフェース
 
 ### 基本コマンド
 
 ```bash
-# 目的ベースの検索・クロール（推奨）
-crawler-cli search "Swift Concurrency best practices"
+# 目的ベースのリサーチ（推奨）
+research-cli "Swift Concurrency best practices"
 
 # オプション指定
-crawler-cli search "Swift Concurrency" \
+research-cli "Swift Concurrency" \
   --limit 100 \
   --model gpt-oss:20b \
-  --format json
+  --format json \
+  --verbose
 
-# 特定のURLから深掘りクロール
-crawler-cli crawl https://developer.apple.com/swift/ \
-  --objective "Swift 6の新機能を収集" \
-  --model gpt-oss:20b
+# ログファイル出力
+research-cli "Swift 6の新機能" --log output.log
 ```
 
 ### テストコマンド
 
 ```bash
-# 検索ステップのテスト（全検索結果を取得）
-crawler-cli test-search "Swift Concurrency"
+# 検索ステップのテスト
+research-cli test-search "Swift Concurrency"
 
 # フェッチのテスト
-crawler-cli test-fetch https://example.com
-
-# LLM分析のテスト
-crawler-cli test-analyze https://example.com "Swift Concurrencyの情報を収集"
+research-cli test-fetch https://example.com
 ```
 
 ### 出力例
 
 ```
-🎯 Objective: Swift Concurrency best practices
-🔑 Generated keywords: ["Swift Concurrency best practices", ...]
+═══════════════════════════════════════════
+🎯 Phase 0: INPUT
+═══════════════════════════════════════════
+objective: Swift Concurrency best practices
+maxVisitedURLs: 100
 
-🔍 Searching: Swift Concurrency best practices
-   Found 5 URLs
+═══════════════════════════════════════════
+📊 Phase 1: OBJECTIVE ANALYSIS
+═══════════════════════════════════════════
+keywords: [Swift Concurrency best practices, async await patterns, ...]
+questions: [What are the key patterns?, ...]
+successCriteria: [Primary documentation found, ...]
+⏱️ Phase 1 duration: 2.3s
 
-📄 Deep crawling: https://example.com/swift-concurrency
-   📊 [0.85] Swift Concurrency Guide
-   ✅ Deep crawl complete: 3 visited, 2 saved
+═══════════════════════════════════════════
+🔍 Phase 2: SEARCH [Swift Concurrency best practices]
+═══════════════════════════════════════════
+Found 5 URLs:
+  [1] https://example.com/swift-concurrency
+  ...
 
-📊 After keyword 'Swift Concurrency best practices':
-   Visited: 15/50, Saved: 8
-   Irrelevant URLs skipped: 3
+═══════════════════════════════════════════
+📄 Phase 3: CONTENT REVIEW
+═══════════════════════════════════════════
+--- Reviewing: https://example.com/swift-concurrency
+    ⏱️ total: 3.5s (fetch: 0.8s, llm: 2.7s)
+    isRelevant: true
+    extractedInfo: Swift Concurrency provides...
+    shouldDeepCrawl: true
+    ┌─ Deep Crawl (2 pages)
+    ├─ [1] https://example.com/async-await
+    │     isRelevant: true
+    │     extractedInfo: Async/await allows...
+    └─ [2] https://example.com/actors
+          isRelevant: true
+          extractedInfo: Actors provide...
 
-✅ Sufficient information gathered
+═══════════════════════════════════════════
+✓ Phase 4: SUFFICIENCY CHECK
+═══════════════════════════════════════════
+isSufficient: true
+shouldGiveUp: false
+→ SUFFICIENT, exiting loop
 
-🏁 Crawl complete!
-   Visited: 15, Saved: 8
-   Keywords used: 2
+═══════════════════════════════════════════
+📝 Phase 5: RESPONSE BUILDING
+═══════════════════════════════════════════
+input reviewedContents: 5 items
+output responseMarkdown: 2500 chars
+
+🏁 Complete!
+   Visited: 8, Relevant: 5
+   Keywords: 1
    Duration: 45.3s
 
 ═══════════════════════════════════════════
@@ -423,21 +368,20 @@ crawler-cli test-analyze https://example.com "Swift Concurrencyの情報を収�
 ═══════════════════════════════════════════
 
 📌 Objective: Swift Concurrency best practices
-🔑 Keywords used: Swift Concurrency best practices, async await patterns
+🔑 Keywords: Swift Concurrency best practices
+❓ Questions: What are the key patterns? / ...
+✓ Criteria: Primary documentation found / ...
 
 📈 Statistics:
-   • Pages visited: 15
-   • Pages saved: 8
-   • Irrelevant URLs skipped: 3
-   • Keywords used: 2
+   • Pages visited: 8
+   • Relevant pages: 5
+   • Keywords used: 1
    • Duration: 45s
 
-🔍 Top Insights:
+📝 Response:
 ───────────────────────────────────────────
-[85%] https://example.com/swift-concurrency
-     Comprehensive guide to Swift Concurrency
-     • Structured concurrency with async/await
-     • Task groups for parallel execution
+# Swift Concurrency Best Practices
+...
 ```
 
 ## エラーハンドリング
@@ -448,7 +392,7 @@ crawler-cli test-analyze https://example.com "Swift Concurrencyの情報を収�
 public enum CrawlerError: Error, Sendable {
     case searchFailed(String)
     case fetchFailed(URL, String)
-    case ollamaUnavailable
+    case modelUnavailable
     case invalidConfiguration(String)
     case timeout
     case noURLsFound
@@ -461,30 +405,26 @@ public enum CrawlerError: Error, Sendable {
 
 ```
 Sources/
-├── AgenticCrawler/
-│   ├── Configuration/
-│   │   └── CrawlerConfiguration.swift
-│   ├── Delegate/
-│   │   └── AgenticCrawlerDelegate.swift
+├── SwiftResearch/
+│   ├── AgenticCrawler.swift              # エントリポイント
 │   ├── Models/
-│   │   ├── CrawlCandidate.swift
-│   │   ├── CrawledContent.swift
-│   │   ├── CrawlerError.swift
-│   │   ├── GenerableModels.swift      # @Generable LLMレスポンス
-│   │   └── StepModels.swift           # Step入出力モデル
+│   │   ├── AnalysisResponse.swift        # @Generable LLMレスポンス
+│   │   ├── CrawlCandidate.swift          # 優先度付き候補 + CrawlCandidateStack
+│   │   ├── CrawledContent.swift          # クロール済みコンテンツ
+│   │   ├── CrawlerError.swift            # エラー定義
+│   │   ├── CrawlerInput.swift            # 設定・入力モデル
+│   │   ├── CrawlerResult.swift           # 結果モデル（旧、参考用）
+│   │   └── StepModels.swift              # Step入出力モデル
 │   ├── Steps/
-│   │   ├── CrawlerStep.swift
-│   │   ├── DeepCrawlStep.swift
-│   │   ├── SearchOrchestratorStep.swift
-│   │   └── SearchStep.swift
+│   │   ├── SearchOrchestratorStep.swift  # 5フェーズオーケストレーター
+│   │   └── SearchStep.swift              # 検索Step
 │   └── Storage/
-│       ├── CrawlCandidateStack.swift
-│       └── MemoryStorage.swift
-└── CrawlerCLI/
-    └── CrawlerCLI.swift
+│       └── MemoryStorage.swift           # インメモリストレージ
+└── ResearchCLI/
+    └── ResearchCLI.swift                 # CLIエントリポイント
 
 Tests/
-└── AgenticCrawlerTests/
+└── SwiftResearchTests/
     └── MemoryStorageTests.swift
 ```
 
@@ -492,7 +432,7 @@ Tests/
 
 ### セマンティック終了条件
 
-従来のクローラーは`maxPages`、`maxDepth`、`maxKeywords`、`maxURLs`などの固定制限で終了を制御しますが、Agentic Crawlerは**LLMによるセマンティック充足度判定**を採用しています。
+従来のクローラーは固定制限で終了を制御しますが、SwiftResearchは**LLMによるセマンティック充足度判定**を採用しています。
 
 - 「目的に対して十分な情報が集まったか」をLLMが判断
 - キーワードの数も、検索結果の数も、LLMが適切と判断する量を使用
@@ -503,16 +443,21 @@ Tests/
 
 `maxVisitedURLs`（CLI: `--limit`）は**セーフティリミット**として機能します。これはLLMの判断ミスや無限ループを防ぐための安全弁であり、通常の終了条件ではありません。
 
-- デフォルト値: 50
+- デフォルト値: 100
 - LLMが充足と判断する前にこの上限に達した場合、クロールを強制終了
 - 通常はセマンティック充足度判定が先に働いて終了する
 
-### 統計の分離
+### AMD Framework参照
 
-- **pagesVisited**: 実際に訪問（フェッチ）したページ数
-- **pagesSaved**: 関連コンテンツとして保存したページ数
+目的分析（Phase 1）では、AMD Framework (arXiv:2502.08557) に基づくソクラテス的質問分解を採用しています。
 
-この分離により、クローラーの効率性（関連コンテンツの割合）を評価できます。
+- **明確化**: 何を意味しているか？
+- **前提検証**: 何を前提としているか？
+- **含意探索**: 何が導かれるか？
+
+### 深掘り（DeepCrawl）の制御
+
+Phase 3では、関連性の高いページから発見されたリンクを深掘りします。LLMが履歴を考慮して続行判断を行い、無関係なページからのリンクは早期に打ち切ります。
 
 ## 今後の拡張予定
 
