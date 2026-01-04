@@ -7,11 +7,13 @@ An LLM-powered, objective-driven research assistant. Autonomously collects infor
 - **Objective-Driven**: Just input your goal, and the LLM plans the research strategy
 - **Autonomous Collection**: Automatically executes search, content review, and deep crawl decisions
 - **Adaptive Termination**: LLM evaluates information sufficiency and terminates at the right time
-- **History-Based Decisions**: Considers past results (hysteresis) in DeepCrawl and sufficiency checks
+- **Parallel Processing**: Multiple workers process URLs concurrently for faster results
+- **Knowledge Sharing**: Workers share discovered facts to avoid duplicate information extraction
+- **Domain Learning**: Automatically prioritizes domains that yield relevant content
 
 ## Architecture
 
-Operates through a 5-phase orchestration flow:
+Operates through a 5-phase orchestration flow with parallel processing:
 
 ```
 Phase 1: Objective Analysis
@@ -20,9 +22,19 @@ Phase 1: Objective Analysis
 Phase 2: Search & Fetch
     Search with keywords, retrieve URL list
     ↓
-Phase 3: Content Review
-    Review each page, extract relevant information
-    Execute DeepCrawl (follow links) when necessary
+Phase 3: Parallel Content Review
+    ┌─────────────────────────────────────────┐
+    │  CrawlContext (Shared State)            │
+    │  - URL Queue (thread-safe)              │
+    │  - Known Facts (shared between workers) │
+    │  - Relevant Domains (learned)           │
+    └─────────────────────────────────────────┘
+         ↓           ↓           ↓           ↓
+    ┌────────┐  ┌────────┐  ┌────────┐  ┌────────┐
+    │Worker 0│  │Worker 1│  │Worker 2│  │Worker 3│
+    └────────┘  └────────┘  └────────┘  └────────┘
+    - Each worker: fetch → LLM review → add DeepCrawl URLs
+    - Share discovered facts to improve review accuracy
     ↓
 Phase 4: Sufficiency Check
     Evaluate if collected information meets the objective
@@ -34,9 +46,10 @@ Phase 5: Response Building
 
 ## Requirements
 
-- Swift 6.0+
-- macOS 15+ / iOS 18+
+- Swift 6.2+
+- macOS 26+ / iOS 26+
 - [Ollama](https://ollama.ai/) (Local LLM runtime)
+- Optional: Apple FoundationModels (build with `USE_FOUNDATION_MODELS=1`)
 
 ## Installation
 
@@ -128,6 +141,15 @@ This aligns with the **modular pipeline** architecture pattern described in [Age
 
 - **Structured (@Generable)**: Data for programmatic processing (bool flags, keyword arrays, link indices)
 - **Markdown**: Human-readable analysis text, summaries, review content
+
+### Parallel Processing with Shared Context
+
+Phase 3 uses multiple workers (default: 4) to process URLs concurrently:
+
+- **CrawlContext**: Thread-safe shared state using NSLock
+- **Known Facts Sharing**: Each worker sees facts discovered by others, reducing duplicate extraction
+- **Domain Learning**: Tracks which domains yield relevant content (2+ relevant pages)
+- **Dynamic Queue**: Workers add DeepCrawl URLs to shared queue for other workers to process
 
 ### Hysteresis in LLM Decisions
 

@@ -1,6 +1,45 @@
 import Foundation
 
-/// インメモリでクロール結果を保存するストレージ
+// MARK: - MemoryStorage
+
+/// An in-memory storage for crawled content.
+///
+/// This actor provides thread-safe storage for crawled web pages,
+/// with support for URL tracking, searching, and aggregation.
+///
+/// ## Topics
+///
+/// ### Storage Operations
+/// - ``store(_:)-4z5gq``
+/// - ``store(_:)-7gq4l``
+/// - ``get(by:)-5z8ms``
+/// - ``get(by:)-2k5vq``
+/// - ``getAll()``
+///
+/// ### URL Tracking
+/// - ``hasVisited(_:)``
+/// - ``markAsVisited(_:)``
+/// - ``getVisitedURLs()``
+///
+/// ### Statistics
+/// - ``count``
+/// - ``visitedCount``
+/// - ``totalLinksCount``
+///
+/// ### Search
+/// - ``search(titleContaining:)``
+/// - ``search(contentContaining:)``
+/// - ``getContents(forDomain:)``
+///
+/// ### Aggregation
+/// - ``getCombinedMarkdown(separator:)``
+/// - ``getContentForSummary(maxCharacters:)``
+///
+/// ### Management
+/// - ``remove(by:)-3eqjz``
+/// - ``remove(by:)-7zzoh``
+/// - ``clear()``
+/// - ``removeContents(olderThan:)``
 public actor MemoryStorage {
 
     // MARK: - Properties
@@ -11,77 +50,100 @@ public actor MemoryStorage {
 
     // MARK: - Initialization
 
+    /// Creates an empty memory storage.
     public init() {}
 
     // MARK: - Storage Operations
 
-    /// コンテンツを保存する
+    /// Stores content in the storage.
+    ///
+    /// - Parameter content: The content to store.
     public func store(_ content: CrawledContent) {
         contents[content.id] = content
         urlIndex[content.url] = content.id
         visitedURLs.insert(content.url)
     }
 
-    /// 複数のコンテンツを一括保存する
+    /// Stores multiple content items.
+    ///
+    /// - Parameter newContents: The content items to store.
     public func store(_ newContents: [CrawledContent]) {
         for content in newContents {
             store(content)
         }
     }
 
-    /// IDでコンテンツを取得する
+    /// Retrieves content by its ID.
+    ///
+    /// - Parameter id: The content ID.
+    /// - Returns: The content, or `nil` if not found.
     public func get(by id: UUID) -> CrawledContent? {
         contents[id]
     }
 
-    /// URLでコンテンツを取得する
+    /// Retrieves content by its URL.
+    ///
+    /// - Parameter url: The content URL.
+    /// - Returns: The content, or `nil` if not found.
     public func get(by url: URL) -> CrawledContent? {
         guard let id = urlIndex[url] else { return nil }
         return contents[id]
     }
 
-    /// 全てのコンテンツを取得する
+    /// Retrieves all stored content, sorted by crawl time.
+    ///
+    /// - Returns: All content items, oldest first.
     public func getAll() -> [CrawledContent] {
         Array(contents.values).sorted { $0.crawledAt < $1.crawledAt }
     }
 
     // MARK: - URL Tracking
 
-    /// URLが訪問済みかどうかを確認する
+    /// Checks whether a URL has been visited.
+    ///
+    /// - Parameter url: The URL to check.
+    /// - Returns: `true` if the URL has been visited.
     public func hasVisited(_ url: URL) -> Bool {
         visitedURLs.contains(url)
     }
 
-    /// URLを訪問済みとしてマークする
+    /// Marks a URL as visited.
+    ///
+    /// - Parameter url: The URL to mark.
     public func markAsVisited(_ url: URL) {
         visitedURLs.insert(url)
     }
 
-    /// 訪問済みURLの一覧を取得する
+    /// Returns all visited URLs.
+    ///
+    /// - Returns: The set of visited URLs.
     public func getVisitedURLs() -> Set<URL> {
         visitedURLs
     }
 
     // MARK: - Statistics
 
-    /// 保存されているコンテンツの数を取得する
+    /// The number of stored content items.
     public var count: Int {
         contents.count
     }
 
-    /// 訪問済みURLの数を取得する
+    /// The number of visited URLs.
     public var visitedCount: Int {
         visitedURLs.count
     }
 
-    /// 全リンク数を取得する
+    /// The total number of links across all content.
     public var totalLinksCount: Int {
         contents.values.reduce(0) { $0 + $1.links.count }
     }
 
     // MARK: - Search
 
-    /// タイトルでコンテンツを検索する
+    /// Searches for content by title.
+    ///
+    /// - Parameter query: The search query (case-insensitive).
+    /// - Returns: Content items with matching titles.
     public func search(titleContaining query: String) -> [CrawledContent] {
         let lowercasedQuery = query.lowercased()
         return contents.values.filter {
@@ -89,7 +151,10 @@ public actor MemoryStorage {
         }
     }
 
-    /// Markdownコンテンツで検索する
+    /// Searches for content by markdown content.
+    ///
+    /// - Parameter query: The search query (case-insensitive).
+    /// - Returns: Content items with matching content.
     public func search(contentContaining query: String) -> [CrawledContent] {
         let lowercasedQuery = query.lowercased()
         return contents.values.filter {
@@ -97,7 +162,10 @@ public actor MemoryStorage {
         }
     }
 
-    /// ドメインでコンテンツをフィルタリングする
+    /// Retrieves content for a specific domain.
+    ///
+    /// - Parameter domain: The domain to filter by.
+    /// - Returns: Content items from the specified domain.
     public func getContents(forDomain domain: String) -> [CrawledContent] {
         contents.values.filter {
             $0.url.host == domain
@@ -106,7 +174,10 @@ public actor MemoryStorage {
 
     // MARK: - Aggregation
 
-    /// Markdownコンテンツを結合して取得する
+    /// Combines all content into a single markdown string.
+    ///
+    /// - Parameter separator: The separator between content items.
+    /// - Returns: Combined markdown content.
     public func getCombinedMarkdown(separator: String = "\n\n---\n\n") -> String {
         getAll()
             .map { content in
@@ -121,7 +192,12 @@ public actor MemoryStorage {
             .joined(separator: separator)
     }
 
-    /// 要約用のコンテンツを取得する（トークン制限考慮）
+    /// Retrieves content for summarization with a character limit.
+    ///
+    /// Truncates individual content items to fit within the limit.
+    ///
+    /// - Parameter maxCharacters: The maximum total characters.
+    /// - Returns: Combined content suitable for summarization.
     public func getContentForSummary(maxCharacters: Int = 50000) -> String {
         var result = ""
         for content in getAll() {
@@ -140,14 +216,20 @@ public actor MemoryStorage {
 
     // MARK: - Management
 
-    /// 特定のコンテンツを削除する
+    /// Removes content by its ID.
+    ///
+    /// - Parameter id: The content ID to remove.
     public func remove(by id: UUID) {
         if let content = contents.removeValue(forKey: id) {
             urlIndex.removeValue(forKey: content.url)
         }
     }
 
-    /// URLでコンテンツを削除する
+    /// Removes content by its URL.
+    ///
+    /// Also removes the URL from the visited set.
+    ///
+    /// - Parameter url: The URL to remove.
     public func remove(by url: URL) {
         if let id = urlIndex.removeValue(forKey: url) {
             contents.removeValue(forKey: id)
@@ -155,14 +237,16 @@ public actor MemoryStorage {
         visitedURLs.remove(url)
     }
 
-    /// 全てのデータをクリアする
+    /// Clears all stored data.
     public func clear() {
         contents.removeAll()
         urlIndex.removeAll()
         visitedURLs.removeAll()
     }
 
-    /// 古いコンテンツを削除する（指定日時より前）
+    /// Removes content older than the specified date.
+    ///
+    /// - Parameter date: The cutoff date.
     public func removeContents(olderThan date: Date) {
         let toRemove = contents.values.filter { $0.crawledAt < date }
         for content in toRemove {
@@ -174,7 +258,9 @@ public actor MemoryStorage {
 // MARK: - Snapshot Support
 
 extension MemoryStorage {
-    /// ストレージのスナップショットを作成する
+    /// Creates a snapshot of the current storage state.
+    ///
+    /// - Returns: A snapshot containing all content and visited URLs.
     public func createSnapshot() -> StorageSnapshot {
         StorageSnapshot(
             contents: Array(contents.values),
@@ -182,7 +268,11 @@ extension MemoryStorage {
         )
     }
 
-    /// スナップショットから復元する
+    /// Restores the storage from a snapshot.
+    ///
+    /// This clears any existing data before restoring.
+    ///
+    /// - Parameter snapshot: The snapshot to restore from.
     public func restore(from snapshot: StorageSnapshot) {
         clear()
         for content in snapshot.contents {
@@ -194,12 +284,26 @@ extension MemoryStorage {
     }
 }
 
-/// ストレージのスナップショット
+// MARK: - StorageSnapshot
+
+/// A snapshot of the storage state.
+///
+/// Can be used to save and restore the storage state.
 public struct StorageSnapshot: Sendable {
+    /// The stored content items.
     public let contents: [CrawledContent]
+
+    /// The set of visited URLs.
     public let visitedURLs: Set<URL>
+
+    /// The timestamp when the snapshot was created.
     public let createdAt: Date
 
+    /// Creates a new storage snapshot.
+    ///
+    /// - Parameters:
+    ///   - contents: The content items to include.
+    ///   - visitedURLs: The visited URLs to include.
     public init(contents: [CrawledContent], visitedURLs: Set<URL>) {
         self.contents = contents
         self.visitedURLs = visitedURLs

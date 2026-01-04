@@ -34,10 +34,17 @@ SwiftResearchは、SwiftAgentフレームワークを使用したAI駆動のリ�
 │  │       - キーワードで検索エンジン検索                             │ │
 │  │       - URL一覧取得                                             │ │
 │  │       ↓                                                        │ │
-│  │  Phase 3: CONTENT REVIEW (コンテンツレビュー)                   │ │
-│  │       - 各URLをフェッチ                                         │ │
-│  │       - LLMで関連性判定・情報抽出                               │ │
-│  │       - 深掘り（DeepCrawl）                                     │ │
+│  │  Phase 3: PARALLEL CONTENT REVIEW (並列コンテンツレビュー)       │ │
+│  │       ┌─────────────────────────────────────┐                   │ │
+│  │       │  CrawlContext (共有状態)            │                   │ │
+│  │       │  - URLキュー                        │                   │ │
+│  │       │  - 既知事実 (knownFacts)            │                   │ │
+│  │       │  - 有用ドメイン学習                 │                   │ │
+│  │       └─────────────────────────────────────┘                   │ │
+│  │            ↓        ↓        ↓        ↓                        │ │
+│  │       [Worker0] [Worker1] [Worker2] [Worker3]                   │ │
+│  │       - 各ワーカー: fetch → LLMレビュー → DeepCrawl URL追加     │ │
+│  │       - 既知事実を共有して重複抽出を防止                        │ │
 │  │       ↓                                                        │ │
 │  │  Phase 4: SUFFICIENCY CHECK (充足度チェック)                    │ │
 │  │       - 十分 → ループ終了                                       │ │
@@ -108,7 +115,38 @@ public actor CrawlCandidateStack {
 }
 ```
 
-#### 4. MemoryStorage
+#### 4. CrawlContext
+
+並列クロールの共有状態を管理するスレッドセーフなクラス。
+
+```swift
+public final class CrawlContext: @unchecked Sendable {
+    // URL管理
+    func enqueueURLs(_ urls: [URL])      // URLをキューに追加（重複除外）
+    func dequeueURL() -> URL?            // 次のURLを取得
+    func completeURL(_ url: URL)         // 処理完了を記録
+    func isVisited(_ url: URL) -> Bool   // 訪問済みチェック
+
+    // 結果管理
+    func addResult(_ content: ReviewedContent)
+    var reviewedContents: [ReviewedContent] { get }
+    var relevantCount: Int { get }
+
+    // 共有情報（レビュー精度向上用）
+    func getKnownFacts(limit: Int) -> [String]  // 既知事実を取得
+    func getRelevantDomains() -> Set<String>    // 有用ドメインを取得
+
+    // 制御
+    func markSufficient()                // 十分フラグを立てる
+    var isSufficient: Bool { get }
+    var hasMoreURLs: Bool { get }
+
+    // 統計
+    func getStatistics() -> (processed: Int, relevant: Int, queued: Int, inProgress: Int)
+}
+```
+
+#### 5. MemoryStorage
 
 インメモリでクロール結果を保存するActor。
 
@@ -266,7 +304,6 @@ public struct FinalResponseBuildingResponse: Sendable {
 ```swift
 public struct CrawlerConfiguration: Sendable {
     let searchEngine: SearchEngine      // .duckDuckGo, .google, .bing
-    let maxSearchResults: Int           // デフォルト: 5
     let requestDelay: Duration          // デフォルト: .milliseconds(500)
     let modelName: String               // デフォルト: "gpt-oss:20b"
     let baseURL: URL                    // デフォルト: http://127.0.0.1:11434
@@ -330,20 +367,22 @@ Found 5 URLs:
   ...
 
 ═══════════════════════════════════════════
-📄 Phase 3: CONTENT REVIEW
+📄 Phase 3: PARALLEL CONTENT REVIEW
 ═══════════════════════════════════════════
---- Reviewing: https://example.com/swift-concurrency
-    ⏱️ total: 3.5s (fetch: 0.8s, llm: 2.7s)
-    isRelevant: true
-    extractedInfo: Swift Concurrency provides...
-    shouldDeepCrawl: true
-    ┌─ Deep Crawl (2 pages)
-    ├─ [1] https://example.com/async-await
-    │     isRelevant: true
-    │     extractedInfo: Async/await allows...
-    └─ [2] https://example.com/actors
-          isRelevant: true
-          extractedInfo: Actors provide...
+   Queue: 10 URLs, Concurrency: 4
+   [W0] → example.com
+   [W1] → docs.swift.org
+   [W2] → hackingwithswift.com
+   [W3] → swiftbysundell.com
+   [W0]    +2 deep URLs
+   [W0] ✓ 12.3s Swift Concurrency provides structured...
+   [W1] ✓ 15.7s Async/await allows non-blocking code...
+   [W2]    +1 deep URLs
+   [W2] ✓ 18.2s The actor model prevents data races...
+   [W3] · 20.1s (not relevant)
+
+Phase 3 Summary: processed=10, relevant=7
+⏱️ Phase 3 total: 45.2s
 
 ═══════════════════════════════════════════
 ✓ Phase 4: SUFFICIENCY CHECK
@@ -410,13 +449,14 @@ Sources/
 │   ├── Models/
 │   │   ├── AnalysisResponse.swift        # @Generable LLMレスポンス
 │   │   ├── CrawlCandidate.swift          # 優先度付き候補 + CrawlCandidateStack
+│   │   ├── CrawlContext.swift            # 並列クロール共有状態（NEW）
 │   │   ├── CrawledContent.swift          # クロール済みコンテンツ
 │   │   ├── CrawlerError.swift            # エラー定義
 │   │   ├── CrawlerInput.swift            # 設定・入力モデル
 │   │   ├── CrawlerResult.swift           # 結果モデル（旧、参考用）
 │   │   └── StepModels.swift              # Step入出力モデル
 │   ├── Steps/
-│   │   ├── SearchOrchestratorStep.swift  # 5フェーズオーケストレーター
+│   │   ├── SearchOrchestratorStep.swift  # 5フェーズオーケストレーター（並列対応）
 │   │   └── SearchStep.swift              # 検索Step
 │   └── Storage/
 │       └── MemoryStorage.swift           # インメモリストレージ
@@ -454,6 +494,43 @@ Tests/
 - **明確化**: 何を意味しているか？
 - **前提検証**: 何を前提としているか？
 - **含意探索**: 何が導かれるか？
+
+### 並列処理アーキテクチャ
+
+Phase 3では、複数のワーカーが並列でURLを処理します。
+
+#### CrawlContext（共有状態）
+
+- **スレッドセーフ**: NSLockによる排他制御
+- **URLキュー**: 訪問済みURLの自動除外、動的なDeepCrawl URL追加
+- **既知事実（knownFacts）**: 各ワーカーが抽出した情報を共有し、重複抽出を防止
+- **有用ドメイン学習**: 2回以上関連ページが見つかったドメインを追跡
+
+#### ワーカー動作
+
+```
+while (url = context.dequeueURL()) {
+    if context.isSufficient { break }
+
+    content = await fetch(url)
+    knownFacts = context.getKnownFacts(limit: 5)
+
+    review = await llm.review(content, knownFacts: knownFacts)
+    context.addResult(review)
+
+    if review.shouldDeepCrawl {
+        context.enqueueURLs(review.priorityLinks)
+    }
+
+    context.completeURL(url)
+}
+```
+
+#### パフォーマンス効果
+
+- **並列処理**: 4ワーカー同時実行で処理時間を約50%削減
+- **既知事実共有**: 重複情報の抽出を防ぎ、LLMコストを削減
+- **動的キュー**: DeepCrawl URLを即座に他ワーカーが処理可能
 
 ### 深掘り（DeepCrawl）の制御
 

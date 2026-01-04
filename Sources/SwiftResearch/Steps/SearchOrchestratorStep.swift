@@ -1,20 +1,23 @@
 import Foundation
 import SwiftAgent
-import OpenFoundationModels
-import OpenFoundationModelsOllama
 import RemarkKit
 
-/// グローバルなログファイルハンドル
+/// Global log file handle for writing output.
 nonisolated(unsafe) var globalLogFileHandle: FileHandle?
 
-/// 出力を即時フラッシュするprint（ログファイルにも出力）
+/// Lock for thread-safe logging.
+private let logLock = NSLock()
+
+/// Thread-safe print that flushes immediately and writes to log file.
 @inline(__always)
 internal func printFlush(_ items: Any..., separator: String = " ", terminator: String = "\n") {
+    logLock.lock()
+    defer { logLock.unlock() }
+
     let output = items.map { String(describing: $0) }.joined(separator: separator)
     print(output, terminator: terminator)
     fflush(stdout)
 
-    // ログファイルにも書き込み
     if let handle = globalLogFileHandle {
         let logLine = output + terminator
         if let data = logLine.data(using: .utf8) {
@@ -23,20 +26,45 @@ internal func printFlush(_ items: Any..., separator: String = " ", terminator: S
     }
 }
 
-/// 検索からクロール、結果統合までをオーケストレーションするStep
-/// 5フェーズ: 目的分析 → 検索・取得 → コンテンツレビュー → 充足度チェック → 応答構築
+/// Orchestrates the complete research workflow from search to response generation.
+///
+/// The workflow consists of 5 phases:
+/// 1. Objective Analysis - Extract keywords and success criteria
+/// 2. Search - Find relevant URLs via search engine
+/// 3. Parallel Content Review - Fetch and review pages concurrently
+/// 4. Sufficiency Check - Determine if enough information is collected
+/// 5. Response Building - Generate final response from collected data
+///
+/// ## Example
+///
+/// ```swift
+/// let session = LanguageModelSession(model: model, tools: [], instructions: nil as String?)
+/// let orchestrator = SearchOrchestratorStep(session: session)
+/// let result = try await orchestrator.run(SearchQuery(objective: "..."))
+/// ```
 public struct SearchOrchestratorStep: Step, Sendable {
     public typealias Input = SearchQuery
     public typealias Output = AggregatedResult
 
+    private let session: LanguageModelSession
     private let configuration: CrawlerConfiguration
     private let verbose: Bool
     private let logFileURL: URL?
 
-    /// 訪問済みURL管理（Phase 2, 3, DeepCrawlで共有）
-    @Memory var visitedURLs: Set<URL> = []
-
-    public init(configuration: CrawlerConfiguration = .default, verbose: Bool = false, logFileURL: URL? = nil) {
+    /// Creates a new search orchestrator step.
+    ///
+    /// - Parameters:
+    ///   - session: The language model session to use for LLM operations.
+    ///   - configuration: The crawler configuration.
+    ///   - verbose: Whether to output verbose logging.
+    ///   - logFileURL: Optional file URL to write logs to.
+    public init(
+        session: LanguageModelSession,
+        configuration: CrawlerConfiguration = .default,
+        verbose: Bool = false,
+        logFileURL: URL? = nil
+    ) {
+        self.session = session
         self.configuration = configuration
         self.verbose = verbose
         self.logFileURL = logFileURL
@@ -45,26 +73,16 @@ public struct SearchOrchestratorStep: Step, Sendable {
     public func run(_ input: SearchQuery) async throws -> AggregatedResult {
         let startTime = Date()
 
-        // ログファイルハンドルを設定
+        // Set up log file handle
         if let logURL = logFileURL {
             FileManager.default.createFile(atPath: logURL.path, contents: nil)
             globalLogFileHandle = try? FileHandle(forWritingTo: logURL)
+            printFlush("📝 Logging to: \(logURL.path)")
         }
         defer {
             try? globalLogFileHandle?.close()
             globalLogFileHandle = nil
         }
-
-        // LLM設定
-        let llmConfig = OllamaConfiguration(
-            baseURL: configuration.baseURL,
-            timeout: configuration.timeout,
-            keepAlive: "10m"
-        )
-        let llm = OllamaLanguageModel(
-            configuration: llmConfig,
-            modelName: configuration.modelName
-        )
 
         printFlush("═══════════════════════════════════════════")
         printFlush("🎯 Phase 0: INPUT")
@@ -73,45 +91,46 @@ public struct SearchOrchestratorStep: Step, Sendable {
         printFlush("maxVisitedURLs: \(input.maxVisitedURLs)")
         printFlush("")
 
-        // ===== Phase 1: 目的分析 =====
+        // ===== Phase 1: Objective Analysis =====
         printFlush("═══════════════════════════════════════════")
         printFlush("📊 Phase 1: OBJECTIVE ANALYSIS")
         printFlush("═══════════════════════════════════════════")
         let phase1Start = Date()
-        let analysis = await analyzeObjective(
-            objective: input.objective,
-            llm: llm
-        )
+        let analysis = await analyzeObjective(objective: input.objective)
         let phase1Duration = Date().timeIntervalSince(phase1Start)
         printFlush("⏱️ Phase 1 duration: \(String(format: "%.1f", phase1Duration))s")
 
-        // 非verboseモードではサマリーのみ表示（verboseは関数内で詳細表示済み）
-        if !verbose {
-            printFlush("keywords: [\(analysis.keywords.joined(separator: ", "))]")
-            printFlush("questions: [\(analysis.questions.joined(separator: ", "))]")
-            printFlush("successCriteria: [\(analysis.successCriteria.joined(separator: ", "))]")
+        if verbose {
+            printFlush("keywords: \(analysis.keywords)")
+            printFlush("questions: \(analysis.questions)")
+            printFlush("successCriteria: \(analysis.successCriteria)")
         }
         printFlush("")
 
-        // ===== Phase 2-4 ループ =====
-        var reviewedContents: [ReviewedContent] = []
+        // Create shared context for parallel crawling
+        let context = CrawlContext(
+            objective: input.objective,
+            successCriteria: analysis.successCriteria,
+            maxURLs: input.maxVisitedURLs,
+            configuration: configuration.researchConfiguration
+        )
+
+        // ===== Phase 2-4 Loop =====
         var usedKeywords: [String] = []
         var pendingKeywords: [String] = analysis.keywords
         var usedKeywordSet: Set<String> = []
-        visitedURLs = []  // リセット（新しいクエリ開始時）
-        var totalPagesVisited = 0
-        var previousRelevantCount = 0  // 前回ラウンド終了時の関連ページ数
+        var previousRelevantCount = 0
 
         while let keyword = pendingKeywords.first {
             pendingKeywords.removeFirst()
 
-            // URL上限チェック
-            if totalPagesVisited >= input.maxVisitedURLs {
+            // Check URL limit
+            if context.totalProcessed >= input.maxVisitedURLs {
                 printFlush("⚠️ URL limit reached (\(input.maxVisitedURLs))")
                 break
             }
 
-            // 重複キーワードをスキップ
+            // Skip duplicate keywords
             let normalizedKeyword = keyword.lowercased().trimmingCharacters(in: .whitespaces)
             if usedKeywordSet.contains(normalizedKeyword) {
                 continue
@@ -120,12 +139,13 @@ public struct SearchOrchestratorStep: Step, Sendable {
             usedKeywordSet.insert(normalizedKeyword)
             usedKeywords.append(keyword)
 
+            // ===== Phase 2: Search =====
+            printFlush("")
             printFlush("═══════════════════════════════════════════")
             printFlush("🔍 Phase 2: SEARCH [\(keyword)]")
             printFlush("═══════════════════════════════════════════")
             let phase2Start = Date()
 
-            // ===== Phase 2: 検索・取得 =====
             let searchStep = SearchStep(
                 searchEngine: configuration.searchEngine,
                 blockedDomains: configuration.blockedDomains
@@ -140,183 +160,99 @@ public struct SearchOrchestratorStep: Step, Sendable {
             }
 
             let phase2Duration = Date().timeIntervalSince(phase2Start)
-            if verbose {
-                printFlush("⏱️ Phase 2 duration: \(String(format: "%.1f", phase2Duration))s")
-            }
+            printFlush("⏱️ Phase 2 duration: \(String(format: "%.1f", phase2Duration))s")
 
-            printFlush("Found \(urls.count) URLs:")
-            for (i, url) in urls.enumerated() {
+            // Filter by allowed domains
+            let filteredURLs = urls.filter { isAllowedDomain($0) }
+            printFlush("Found \(urls.count) URLs (\(filteredURLs.count) after domain filter):")
+            for (i, url) in filteredURLs.enumerated() {
                 printFlush("  [\(i+1)] \(url.absoluteString)")
             }
+
+            // Add URLs to queue
+            context.enqueueURLs(filteredURLs)
+            printFlush("Queue: \(context.queueCount) URLs (after dedup)")
             printFlush("")
 
-            // 重複URL除去
-            let newURLs = urls.filter { !visitedURLs.contains($0) }
-            if newURLs.isEmpty {
-                printFlush("   ⏭️ All URLs already visited")
-                continue
-            }
+            // ===== Phase 3: Parallel Content Review =====
+            await parallelContentReview(context: context)
 
-            $visitedURLs.formUnion(newURLs)
-
-            // ===== Phase 3: コンテンツレビュー =====
+            // ===== Phase 4: Sufficiency Check =====
             printFlush("")
-            printFlush("═══════════════════════════════════════════")
-            printFlush("📄 Phase 3: CONTENT REVIEW")
-            printFlush("═══════════════════════════════════════════")
-            let phase3Start = Date()
-
-            for url in newURLs {
-                if totalPagesVisited >= input.maxVisitedURLs {
-                    break
-                }
-
-                printFlush("--- Reviewing: \(url.absoluteString)")
-                let pageStart = Date()
-
-                let reviewResult = await fetchAndReview(
-                    url: url,
-                    objective: input.objective,
-                    llm: llm
-                )
-
-                let pageDuration = Date().timeIntervalSince(pageStart)
-                totalPagesVisited += 1
-
-                guard let result = reviewResult else {
-                    if verbose {
-                        printFlush("    ⏱️ \(String(format: "%.1f", pageDuration))s - FAILED")
-                    } else {
-                        printFlush("    fetch: FAILED")
-                    }
-                    continue
-                }
-
-                // 時間とサマリーを表示（詳細はreviewContent内で表示済み）
-                printFlush("    ⏱️ total: \(String(format: "%.1f", result.totalDuration))s (fetch: \(String(format: "%.1f", result.fetchDuration))s, llm: \(String(format: "%.1f", result.llmDuration))s)")
-
-                // 非verboseモードではサマリーのみ表示
-                if !verbose {
-                    printFlush("    isRelevant: \(result.reviewed.isRelevant)")
-                    printFlush("    extractedInfo: \(result.reviewed.extractedInfo.prefix(100))...")
-                    printFlush("    shouldDeepCrawl: \(result.shouldDeepCrawl)")
-                }
-
-                if result.reviewed.isRelevant {
-                    reviewedContents.append(result.reviewed)
-
-                    // 深掘り処理
-                    if result.shouldDeepCrawl, let deepResults = result.deepCrawlResults {
-                        if !verbose {
-                            printFlush("    ┌─ Deep Crawl (\(deepResults.count) pages)")
-                        }
-                        for (idx, deepResult) in deepResults.enumerated() {
-                            totalPagesVisited += 1
-                            if !verbose {
-                                let prefix = idx == deepResults.count - 1 ? "└" : "├"
-                                printFlush("    \(prefix)─ [\(idx+1)] \(deepResult.reviewed.url.absoluteString)")
-                                printFlush("    │     isRelevant: \(deepResult.reviewed.isRelevant)")
-                                printFlush("    │     extractedInfo: \(deepResult.reviewed.extractedInfo.prefix(50))...")
-                            }
-                            if deepResult.reviewed.isRelevant {
-                                reviewedContents.append(deepResult.reviewed)
-                            }
-                        }
-                    }
-                }
-
-                // リクエスト間隔
-                try? await Task.sleep(for: configuration.requestDelay)
-            }
-
-            let phase3Duration = Date().timeIntervalSince(phase3Start)
-            printFlush("")
-            printFlush("Phase 3 Summary: visited=\(totalPagesVisited), relevant=\(reviewedContents.count)")
-            printFlush("⏱️ Phase 3 total: \(String(format: "%.1f", phase3Duration))s")
-            printFlush("")
-
-            // ===== Phase 4: 充足度チェック =====
             printFlush("═══════════════════════════════════════════")
             printFlush("✓ Phase 4: SUFFICIENCY CHECK")
             printFlush("═══════════════════════════════════════════")
             let phase4Start = Date()
 
-            let newRelevantThisRound = reviewedContents.count - previousRelevantCount
+            let newRelevantThisRound = context.relevantCount - previousRelevantCount
 
             let sufficiency = await checkSufficiency(
-                reviewedContents: reviewedContents,
-                objective: input.objective,
-                successCriteria: analysis.successCriteria,
+                context: context,
                 searchRoundNumber: usedKeywords.count,
-                newRelevantThisRound: newRelevantThisRound,
-                llm: llm
+                newRelevantThisRound: newRelevantThisRound
             )
 
-            // 次ラウンドのために更新
-            previousRelevantCount = reviewedContents.count
+            previousRelevantCount = context.relevantCount
 
             let phase4Duration = Date().timeIntervalSince(phase4Start)
             printFlush("⏱️ Phase 4 duration: \(String(format: "%.1f", phase4Duration))s")
 
-            // 非verboseモードではサマリーのみ表示（verboseは関数内で詳細表示済み）
-            if !verbose {
+            if verbose {
                 printFlush("isSufficient: \(sufficiency.isSufficient)")
                 printFlush("shouldGiveUp: \(sufficiency.shouldGiveUp)")
-                printFlush("additionalKeywords: [\(sufficiency.additionalKeywords.joined(separator: ", "))]")
-                printFlush("reason: \(sufficiency.reasonMarkdown.prefix(150))...")
+                printFlush("additionalKeywords: \(sufficiency.additionalKeywords)")
+                printFlush("reason: \(sufficiency.reasonMarkdown.prefix(200))...")
             }
             printFlush("")
 
             if sufficiency.isSufficient {
                 printFlush("→ SUFFICIENT, exiting loop")
+                context.markSufficient()
                 break
             } else if sufficiency.shouldGiveUp {
                 printFlush("→ GIVE UP, exiting loop")
                 break
             } else {
-                // 追加キーワードを追加
                 let newKeywords = sufficiency.additionalKeywords.filter { keyword in
                     let normalized = keyword.lowercased().trimmingCharacters(in: .whitespaces)
                     return !usedKeywordSet.contains(normalized)
                 }
                 if !newKeywords.isEmpty {
-                    printFlush("→ Adding \(newKeywords.count) new keywords")
+                    printFlush("→ Adding \(newKeywords.count) new keywords: \(newKeywords)")
                     pendingKeywords.append(contentsOf: newKeywords)
                 }
             }
         }
 
-        // ===== Phase 5: 応答構築 =====
+        // ===== Phase 5: Response Building =====
+        printFlush("")
         printFlush("═══════════════════════════════════════════")
         printFlush("📝 Phase 5: RESPONSE BUILDING")
         printFlush("═══════════════════════════════════════════")
         let phase5Start = Date()
 
-        // 非verboseモードでは入力サマリーを表示（verboseは関数内で詳細表示）
-        if !verbose {
+        let reviewedContents = context.reviewedContents
+        if verbose {
             printFlush("input reviewedContents: \(reviewedContents.count) items")
-            for (i, c) in reviewedContents.enumerated() {
+            for (i, c) in reviewedContents.prefix(10).enumerated() {
                 printFlush("  [\(i+1)] \(c.url.host ?? "?"): \(c.extractedInfo.prefix(60))...")
             }
-            printFlush("")
         }
 
         let responseMarkdown = await buildFinalResponse(
             reviewedContents: reviewedContents,
-            objective: input.objective,
-            llm: llm
+            objective: input.objective
         )
 
         let phase5Duration = Date().timeIntervalSince(phase5Start)
         printFlush("⏱️ Phase 5 duration: \(String(format: "%.1f", phase5Duration))s")
         printFlush("output responseMarkdown: \(responseMarkdown.count) chars")
-        printFlush("")
 
         let endTime = Date()
 
         let statistics = AggregatedStatistics(
-            totalPagesVisited: totalPagesVisited,
-            relevantPagesFound: reviewedContents.count,
+            totalPagesVisited: context.totalProcessed,
+            relevantPagesFound: context.relevantCount,
             keywordsUsed: usedKeywords.count,
             duration: Duration.seconds(endTime.timeIntervalSince(startTime))
         )
@@ -340,11 +276,7 @@ public struct SearchOrchestratorStep: Step, Sendable {
 
     // MARK: - Phase 1: Objective Analysis
 
-    private func analyzeObjective(
-        objective: String,
-        llm: OllamaLanguageModel
-    ) async -> ObjectiveAnalysis {
-        // AMD Framework (arXiv:2502.08557) に基づくソクラテス的質問分解
+    private func analyzeObjective(objective: String) async -> ObjectiveAnalysis {
         let prompt = """
         あなたは情報収集エージェントです。目的を分析してください。
 
@@ -369,7 +301,6 @@ public struct SearchOrchestratorStep: Step, Sendable {
         - 具体的で検証可能な基準
         """
 
-        // Verbose: プロンプトを表示
         if verbose {
             printFlush("┌─── LLM INPUT (ObjectiveAnalysis) ───")
             printFlush(prompt)
@@ -378,12 +309,10 @@ public struct SearchOrchestratorStep: Step, Sendable {
         }
 
         do {
-            let session = LanguageModelSession(model: llm, tools: [], instructions: nil as String?)
             let response = try await session.respond(generating: ObjectiveAnalysisResponse.self) {
                 Prompt(prompt)
             }
 
-            // Verbose: 生のレスポンスを表示
             if verbose {
                 printFlush("┌─── LLM OUTPUT (ObjectiveAnalysis) ───")
                 printFlush("keywords: \(response.content.keywords)")
@@ -393,24 +322,16 @@ public struct SearchOrchestratorStep: Step, Sendable {
                 printFlush("")
             }
 
-            // バリデーション: 異常な出力を検出
             let rawAnalysis = response.content
 
-            // 1. 空チェック
             if rawAnalysis.keywords.isEmpty {
                 printFlush("⚠️ LLM returned empty keywords, using fallback")
                 return ObjectiveAnalysis.fallback(objective: objective)
             }
 
-            // 2. 重複・過剰生成チェック（最大5個に制限、重複除去）
             let uniqueKeywords = Array(Set(rawAnalysis.keywords)).prefix(5)
             let uniqueQuestions = Array(Set(rawAnalysis.questions)).prefix(5)
             let uniqueCriteria = Array(Set(rawAnalysis.successCriteria)).prefix(3)
-
-            // 3. 異常検出: 元の配列が10個以上なら警告
-            if rawAnalysis.questions.count > 10 {
-                printFlush("⚠️ LLM generated \(rawAnalysis.questions.count) questions (truncated to 5)")
-            }
 
             return ObjectiveAnalysis(
                 keywords: Array(uniqueKeywords),
@@ -423,35 +344,78 @@ public struct SearchOrchestratorStep: Step, Sendable {
         }
     }
 
-    // MARK: - Phase 3: Content Review
+    // MARK: - Phase 3: Parallel Content Review
 
-    /// Deep crawl結果（時間付き、続行判断付き）
-    private struct DeepCrawlResult {
-        let reviewed: ReviewedContent
-        let shouldContinue: Bool
-        let continueReason: String
-        let fetchDuration: TimeInterval
-        let llmDuration: TimeInterval
-        var totalDuration: TimeInterval { fetchDuration + llmDuration }
+    private func parallelContentReview(context: CrawlContext) async {
+        printFlush("═══════════════════════════════════════════")
+        printFlush("📄 Phase 3: PARALLEL CONTENT REVIEW")
+        printFlush("═══════════════════════════════════════════")
+        printFlush("   Queue: \(context.queueCount) URLs, Concurrency: \(context.maxConcurrent)")
+
+        let phase3Start = Date()
+
+        await withTaskGroup(of: Void.self) { group in
+            for workerID in 0..<context.maxConcurrent {
+                group.addTask {
+                    await self.worker(id: workerID, context: context)
+                }
+            }
+        }
+
+        let phase3Duration = Date().timeIntervalSince(phase3Start)
+        let stats = context.getStatistics()
+        printFlush("")
+        printFlush("Phase 3 Summary: processed=\(stats.processed), relevant=\(stats.relevant)")
+        printFlush("⏱️ Phase 3 total: \(String(format: "%.1f", phase3Duration))s")
     }
 
-    /// フェッチとレビューの結果（時間付き）
-    private struct FetchReviewResult {
-        let reviewed: ReviewedContent
-        let shouldDeepCrawl: Bool
-        let deepCrawlResults: [DeepCrawlResult]?
-        let priorityLinks: [PriorityLink]
-        let fetchDuration: TimeInterval
-        let llmDuration: TimeInterval
-        var totalDuration: TimeInterval { fetchDuration + llmDuration }
+    private func worker(id: Int, context: CrawlContext) async {
+        while let url = context.dequeueURL() {
+            // Process until dequeueURL() returns nil
+            // (isSufficient/maxURLs/empty queue checks are performed atomically in dequeueURL)
+
+            let pageStart = Date()
+            let host = url.host ?? url.absoluteString
+            printFlush("   [W\(id)] → \(host)")
+
+            let result = await fetchAndReview(url: url, context: context)
+
+            context.completeURL(url)
+
+            let pageDuration = Date().timeIntervalSince(pageStart)
+
+            if let result = result {
+                context.addResult(result.reviewed)
+
+                // Add deep crawl URLs to queue
+                if let deepURLs = result.deepURLs, !deepURLs.isEmpty {
+                    context.enqueueURLs(deepURLs)
+                    printFlush("   [W\(id)]    +\(deepURLs.count) deep URLs")
+                }
+
+                let status = result.reviewed.isRelevant ? "✓" : "·"
+                let info = result.reviewed.extractedInfo.prefix(60)
+                printFlush("   [W\(id)] \(status) \(String(format: "%.1fs", pageDuration)) \(info)...")
+            } else {
+                printFlush("   [W\(id)] ✗ \(String(format: "%.1fs", pageDuration)) fetch failed")
+            }
+
+            // Request delay
+            try? await Task.sleep(for: configuration.requestDelay)
+        }
     }
 
-    private func fetchAndReview(
-        url: URL,
-        objective: String,
-        llm: OllamaLanguageModel
-    ) async -> FetchReviewResult? {
-        // Remarkでフェッチ
+    // MARK: - Fetch and Review
+
+    private struct FetchReviewResult: Sendable {
+        let reviewed: ReviewedContent
+        let deepURLs: [URL]?
+        let fetchDuration: TimeInterval
+        let llmDuration: TimeInterval
+    }
+
+    private func fetchAndReview(url: URL, context: CrawlContext) async -> FetchReviewResult? {
+        // Fetch with timeout
         let fetchStart = Date()
         let remark: Remark
         let links: [Link]
@@ -471,21 +435,27 @@ public struct SearchOrchestratorStep: Step, Sendable {
             }
             links = try remark.extractLinks()
         } catch {
-            printFlush("   ⚠️ Fetch failed: \(url.absoluteString)")
-            printFlush("      Error: \(error)")
+            if verbose {
+                printFlush("   ⚠️ Fetch failed: \(url.absoluteString) - \(error)")
+            }
             return nil
         }
         let fetchDuration = Date().timeIntervalSince(fetchStart)
 
-        // LLMでコンテンツから情報抽出（問い検証はPhase 4で実施）
+        // Get known facts to improve review accuracy
+        let knownFacts = context.getKnownFacts()
+        let relevantDomains = context.getRelevantDomains()
+
+        // Review
         let llmStart = Date()
         let review = await reviewContent(
             markdown: remark.markdown,
             title: remark.title,
             links: links,
             sourceURL: url,
-            objective: objective,
-            llm: llm
+            objective: context.objective,
+            knownFacts: knownFacts,
+            relevantDomains: relevantDomains
         )
         let llmDuration = Date().timeIntervalSince(llmStart)
 
@@ -496,23 +466,20 @@ public struct SearchOrchestratorStep: Step, Sendable {
             isRelevant: review.isRelevant
         )
 
-        // 深掘り処理
-        var deepCrawlResults: [DeepCrawlResult]? = nil
-        if review.shouldDeepCrawl && !review.priorityLinks.isEmpty {
-            deepCrawlResults = await deepCrawlLinks(
+        // Extract deep crawl URLs if not already sufficient
+        var deepURLs: [URL]? = nil
+        if review.shouldDeepCrawl && !review.priorityLinks.isEmpty && !context.isSufficient {
+            deepURLs = extractDeepURLs(
                 priorityLinks: review.priorityLinks,
                 links: links,
                 sourceURL: url,
-                objective: objective,
-                llm: llm
+                context: context
             )
         }
 
         return FetchReviewResult(
             reviewed: reviewed,
-            shouldDeepCrawl: review.shouldDeepCrawl,
-            deepCrawlResults: deepCrawlResults,
-            priorityLinks: review.priorityLinks,
+            deepURLs: deepURLs,
             fetchDuration: fetchDuration,
             llmDuration: llmDuration
         )
@@ -524,20 +491,28 @@ public struct SearchOrchestratorStep: Step, Sendable {
         links: [Link],
         sourceURL: URL,
         objective: String,
-        llm: OllamaLanguageModel,
-        isDeepCrawl: Bool = false
+        knownFacts: [String],
+        relevantDomains: Set<String>
     ) async -> ContentReview {
-        let truncatedContent = String(markdown.prefix(2000))
+        let maxChars = configuration.researchConfiguration.contentMaxChars
+        let truncatedContent = String(markdown.prefix(maxChars))
 
         let linksInfo = links.prefix(5).enumerated().map { index, link in
             "[\(index + 1)] \(link.text.isEmpty ? "-" : String(link.text.prefix(30))) -> \(link.url)"
         }.joined(separator: "\n")
 
+        let knownFactsSection = knownFacts.isEmpty ? "" : """
+
+        ## 既に収集した情報（重複を避けること）
+        \(knownFacts.map { "- \($0.prefix(100))" }.joined(separator: "\n"))
+        """
+
         let prompt = """
-        目的に関連する情報を抽出してください。
+        目的に関連する**新しい**情報を抽出してください。
 
         ## 目的
         \(objective)
+        \(knownFactsSection)
 
         ## ページ: \(title)
         \(truncatedContent)
@@ -546,228 +521,100 @@ public struct SearchOrchestratorStep: Step, Sendable {
         \(linksInfo)
 
         ## 出力（簡潔に）
-        - isRelevant: 関連があるか
-        - extractedInfo: 関連情報（100-200字）
+        - isRelevant: 新しい関連情報があるか
+        - extractedInfo: 関連情報（100-150字、既知と重複しない）
         - shouldDeepCrawl: 深掘りすべきか
         - priorityLinks: 深掘り候補（最大2件）
         """
 
-        let prefix = isDeepCrawl ? "    │     " : "    "
-
-        // Verbose: プロンプトを表示
         if verbose {
-            printFlush("\(prefix)┌─── LLM INPUT (ContentReview) ───")
-            printFlush("\(prefix)objective: \(objective)")
-            printFlush("\(prefix)title: \(title)")
-            printFlush("\(prefix)content: \(truncatedContent.prefix(200))...")
-            printFlush("\(prefix)links: \(links.count) items")
-            printFlush("\(prefix)└─── END LLM INPUT ───")
+            printFlush("    ┌─── LLM INPUT (ContentReview) ───")
+            printFlush("    objective: \(objective)")
+            printFlush("    title: \(title)")
+            printFlush("    content: \(truncatedContent.prefix(200))...")
+            printFlush("    knownFacts: \(knownFacts.count) items")
+            printFlush("    └─── END LLM INPUT ───")
         }
 
         do {
-            let session = LanguageModelSession(model: llm, tools: [], instructions: nil as String?)
             let response = try await session.respond(generating: ContentReviewResponse.self) {
                 Prompt(prompt)
             }
 
-            // Verbose: 生のLLM出力を表示
             if verbose {
-                printFlush("\(prefix)┌─── LLM OUTPUT (ContentReview) ───")
-                printFlush("\(prefix)isRelevant: \(response.content.isRelevant)")
-                printFlush("\(prefix)extractedInfo: \(response.content.extractedInfo)")
-                printFlush("\(prefix)shouldDeepCrawl: \(response.content.shouldDeepCrawl)")
-                printFlush("\(prefix)priorityLinks: \(response.content.priorityLinks)")
-                printFlush("\(prefix)└─── END LLM OUTPUT ───")
+                printFlush("    ┌─── LLM OUTPUT (ContentReview) ───")
+                printFlush("    isRelevant: \(response.content.isRelevant)")
+                printFlush("    extractedInfo: \(response.content.extractedInfo)")
+                printFlush("    shouldDeepCrawl: \(response.content.shouldDeepCrawl)")
+                printFlush("    priorityLinks: \(response.content.priorityLinks.count) items")
+                printFlush("    └─── END LLM OUTPUT ───")
             }
 
             return ContentReview(from: response.content)
         } catch {
-            printFlush("   ⚠️ Review failed: \(error)")
+            if verbose {
+                printFlush("   ⚠️ Review failed: \(error)")
+            }
             return ContentReview.irrelevant()
         }
     }
 
-    /// 深掘りリンクをフェッチしてレビュー（履歴に基づく続行判断付き）
-    private func deepCrawlLinks(
+    private func extractDeepURLs(
         priorityLinks: [PriorityLink],
         links: [Link],
         sourceURL: URL,
-        objective: String,
-        llm: OllamaLanguageModel
-    ) async -> [DeepCrawlResult] {
-        var results: [DeepCrawlResult] = []
+        context: CrawlContext
+    ) -> [URL] {
+        var deepURLs: [URL] = []
+        let relevantDomains = context.getRelevantDomains()
 
-        // スコア順にソート
         let sortedLinks = priorityLinks.sorted { $0.score > $1.score }
 
-        for priorityLink in sortedLinks {
+        for priorityLink in sortedLinks.prefix(2) {
             guard priorityLink.index > 0 && priorityLink.index <= links.count else { continue }
 
             let link = links[priorityLink.index - 1]
             guard let resolvedURL = URL(string: link.url, relativeTo: sourceURL)?.absoluteURL else { continue }
 
-            // ドメインチェック
-            if !isAllowedDomain(resolvedURL) { continue }
+            // Check domain filter
+            guard isAllowedDomain(resolvedURL) else { continue }
 
-            // 訪問済みチェック（@Memoryで管理）
-            if visitedURLs.contains(resolvedURL) {
-                if verbose {
-                    printFlush("    │     ⏭️ Already visited: \(resolvedURL.absoluteString)")
-                }
-                continue
+            // Check if already visited
+            guard !context.isVisited(resolvedURL) else { continue }
+
+            // Prioritize relevant domains
+            if let host = resolvedURL.host, relevantDomains.contains(host) {
+                deepURLs.insert(resolvedURL, at: 0)
+            } else {
+                deepURLs.append(resolvedURL)
             }
-            $visitedURLs.insert(resolvedURL)
-
-            // フェッチとレビュー（履歴を渡す）
-            if let result = await fetchAndReviewDeepCrawl(
-                url: resolvedURL,
-                objective: objective,
-                previousResults: results,
-                llm: llm
-            ) {
-                results.append(result)
-
-                // LLMが「続けるべきでない」と判断したら中断
-                if !result.shouldContinue {
-                    if verbose {
-                        printFlush("    ⏹️ DeepCrawl中断: \(result.continueReason)")
-                    }
-                    break
-                }
-            }
-
-            try? await Task.sleep(for: configuration.requestDelay)
         }
 
-        return results
-    }
-
-    /// 深掘り用フェッチ＆レビュー（履歴を考慮した続行判断付き）
-    private func fetchAndReviewDeepCrawl(
-        url: URL,
-        objective: String,
-        previousResults: [DeepCrawlResult],
-        llm: OllamaLanguageModel
-    ) async -> DeepCrawlResult? {
-        let fetchStart = Date()
-        let remark: Remark
-
-        do {
-            remark = try await withThrowingTaskGroup(of: Remark.self) { group in
-                group.addTask {
-                    try await Remark.fetch(from: url)
-                }
-                group.addTask {
-                    try await Task.sleep(for: .seconds(15))
-                    throw CancellationError()
-                }
-                let result = try await group.next()!
-                group.cancelAll()
-                return result
-            }
-        } catch {
-            return nil
-        }
-        let fetchDuration = Date().timeIntervalSince(fetchStart)
-
-        // 履歴情報を構築
-        let historyInfo = previousResults.isEmpty ? "なし" : previousResults.enumerated().map { idx, result in
-            "[\(idx + 1)] \(result.reviewed.url.host ?? "?"): \(result.reviewed.isRelevant ? "✓関連あり" : "✗関連なし") - \(result.reviewed.extractedInfo.prefix(50))..."
-        }.joined(separator: "\n")
-
-        let truncatedContent = String(remark.markdown.prefix(2000))
-
-        let prompt = """
-        あなたはリンク先ページをレビューするエージェントです。
-
-        ## 目的
-        \(objective)
-
-        ## 現在のページ: \(remark.title)
-        \(truncatedContent)
-
-        ## これまでの履歴
-        \(historyInfo)
-
-        ## 出力
-        - isRelevant: このページは目的に関連があるか
-        - extractedInfo: 関連情報（100-200字、関連なしなら空文字）
-        - shouldContinue: この親ページの他のリンク先も見るべきか
-          重要: このページが関連なし(isRelevant=false)なら、shouldContinue=falseにすること
-          （関連のないページからのリンク先も関連がない可能性が高い）
-        - reason: 判断理由（1文で簡潔に）
-        """
-
-        let prefix = "    │     "
-
-        if verbose {
-            printFlush("\(prefix)┌─── LLM INPUT (DeepCrawlReview) ───")
-            printFlush("\(prefix)objective: \(objective)")
-            printFlush("\(prefix)title: \(remark.title)")
-            printFlush("\(prefix)history: \(previousResults.count) items")
-            printFlush("\(prefix)└─── END LLM INPUT ───")
-        }
-
-        let llmStart = Date()
-        do {
-            let session = LanguageModelSession(model: llm, tools: [], instructions: nil as String?)
-            let response = try await session.respond(generating: DeepCrawlReviewResponse.self) {
-                Prompt(prompt)
-            }
-
-            if verbose {
-                printFlush("\(prefix)┌─── LLM OUTPUT (DeepCrawlReview) ───")
-                printFlush("\(prefix)isRelevant: \(response.content.isRelevant)")
-                printFlush("\(prefix)extractedInfo: \(response.content.extractedInfo)")
-                printFlush("\(prefix)shouldContinue: \(response.content.shouldContinue)")
-                printFlush("\(prefix)reason: \(response.content.reason)")
-                printFlush("\(prefix)└─── END LLM OUTPUT ───")
-            }
-
-            let llmDuration = Date().timeIntervalSince(llmStart)
-
-            let reviewed = ReviewedContent(
-                url: url,
-                title: remark.title.isEmpty ? nil : remark.title,
-                extractedInfo: response.content.extractedInfo,
-                isRelevant: response.content.isRelevant
-            )
-
-            return DeepCrawlResult(
-                reviewed: reviewed,
-                shouldContinue: response.content.shouldContinue,
-                continueReason: response.content.reason,
-                fetchDuration: fetchDuration,
-                llmDuration: llmDuration
-            )
-        } catch {
-            printFlush("\(prefix)⚠️ DeepCrawl review failed: \(error)")
-            return nil
-        }
+        return deepURLs
     }
 
     // MARK: - Phase 4: Sufficiency Check
 
     private func checkSufficiency(
-        reviewedContents: [ReviewedContent],
-        objective: String,
-        successCriteria: [String],
+        context: CrawlContext,
         searchRoundNumber: Int,
-        newRelevantThisRound: Int,
-        llm: OllamaLanguageModel
+        newRelevantThisRound: Int
     ) async -> SufficiencyResult {
+        let reviewedContents = context.reviewedContents
+
         guard !reviewedContents.isEmpty else {
             return SufficiencyResult.insufficient(reason: "まだ関連情報が収集できていません")
         }
 
         let collectedInfo = reviewedContents
+            .filter { $0.isRelevant }
             .prefix(10)
             .map { content in
                 "【\(content.url.host ?? "unknown")】\(content.extractedInfo)"
             }
             .joined(separator: "\n")
 
-        let criteriaList = successCriteria.enumerated()
+        let criteriaList = context.successCriteria.enumerated()
             .map { "- \($0.element)" }
             .joined(separator: "\n")
 
@@ -775,7 +622,7 @@ public struct SearchOrchestratorStep: Step, Sendable {
         あなたは情報充足度を判断するエージェントです。
 
         ## 目的
-        \(objective)
+        \(context.objective)
 
         ## 成功基準
         \(criteriaList)
@@ -783,7 +630,7 @@ public struct SearchOrchestratorStep: Step, Sendable {
         ## 検索履歴
         - 検索ラウンド: \(searchRoundNumber)回目
         - このラウンドで見つかった新規関連ページ: \(newRelevantThisRound)件
-        - 累計関連ページ: \(reviewedContents.count)件
+        - 累計関連ページ: \(context.relevantCount)件
 
         ## これまでに収集した情報
         \(collectedInfo)
@@ -803,37 +650,27 @@ public struct SearchOrchestratorStep: Step, Sendable {
         4. reasonMarkdown: 判断理由（簡潔に）
         """
 
-        // Verbose: プロンプトを表示
         if verbose {
             printFlush("┌─── LLM INPUT (SufficiencyCheck) ───")
-            printFlush("objective: \(objective)")
-            printFlush("successCriteria: \(successCriteria)")
+            printFlush("objective: \(context.objective)")
+            printFlush("successCriteria: \(context.successCriteria)")
             printFlush("searchRound: \(searchRoundNumber), newRelevantThisRound: \(newRelevantThisRound)")
-            printFlush("collectedInfo (\(reviewedContents.count) items):")
-            for (i, c) in reviewedContents.prefix(5).enumerated() {
-                printFlush("  [\(i+1)] \(c.url.host ?? "?"): \(c.extractedInfo.prefix(80))...")
-            }
-            if reviewedContents.count > 5 {
-                printFlush("  ... and \(reviewedContents.count - 5) more")
-            }
+            printFlush("collectedInfo: \(reviewedContents.count) items")
             printFlush("└─── END LLM INPUT ───")
             printFlush("")
         }
 
         do {
-            let session = LanguageModelSession(model: llm, tools: [], instructions: nil as String?)
             let response = try await session.respond(generating: SufficiencyCheckResponse.self) {
                 Prompt(prompt)
             }
 
-            // Verbose: 生のLLM出力を表示
             if verbose {
                 printFlush("┌─── LLM OUTPUT (SufficiencyCheck) ───")
                 printFlush("isSufficient: \(response.content.isSufficient)")
                 printFlush("shouldGiveUp: \(response.content.shouldGiveUp)")
                 printFlush("additionalKeywords: \(response.content.additionalKeywords)")
-                printFlush("reasonMarkdown:")
-                printFlush(response.content.reasonMarkdown)
+                printFlush("reasonMarkdown: \(response.content.reasonMarkdown.prefix(200))...")
                 printFlush("└─── END LLM OUTPUT ───")
             }
 
@@ -848,14 +685,15 @@ public struct SearchOrchestratorStep: Step, Sendable {
 
     private func buildFinalResponse(
         reviewedContents: [ReviewedContent],
-        objective: String,
-        llm: OllamaLanguageModel
+        objective: String
     ) async -> String {
         guard !reviewedContents.isEmpty else {
             return "# \(objective)\n\n関連情報を収集できませんでした。"
         }
 
-        let collectedInfo = reviewedContents.enumerated().map { index, content in
+        let relevantContents = reviewedContents.filter { $0.isRelevant }
+
+        let collectedInfo = relevantContents.enumerated().map { index, content in
             "[\(index + 1)] \(content.url.host ?? "unknown"): \(content.extractedInfo)"
         }.joined(separator: "\n")
 
@@ -877,35 +715,30 @@ public struct SearchOrchestratorStep: Step, Sendable {
         - ソースURLは後でシステムが追加するため、参照リストは含めない
         """
 
-        // Verbose: プロンプトを表示
         if verbose {
             printFlush("┌─── LLM INPUT (FinalResponse) ───")
             printFlush("objective: \(objective)")
-            printFlush("collectedInfo (\(reviewedContents.count) items):")
-            for (i, c) in reviewedContents.enumerated() {
-                printFlush("  [\(i+1)] \(c.url.host ?? "?"): \(c.extractedInfo.prefix(60))...")
-            }
+            printFlush("collectedInfo: \(relevantContents.count) items")
             printFlush("└─── END LLM INPUT ───")
             printFlush("")
         }
 
         do {
-            let session = LanguageModelSession(model: llm, tools: [], instructions: nil as String?)
             let response = try await session.respond(generating: FinalResponseBuildingResponse.self) {
                 Prompt(prompt)
             }
 
-            // Verbose: 生のLLM出力を表示
             if verbose {
                 printFlush("┌─── LLM OUTPUT (FinalResponse) ───")
-                printFlush("responseMarkdown (\(response.content.responseMarkdown.count) chars):")
-                printFlush(response.content.responseMarkdown)
+                printFlush("responseMarkdown: \(response.content.responseMarkdown.count) chars")
+                printFlush(response.content.responseMarkdown.prefix(500))
+                printFlush("...")
                 printFlush("└─── END LLM OUTPUT ───")
             }
 
             var responseMarkdown = response.content.responseMarkdown
             responseMarkdown += "\n\n## 参照ソース\n"
-            for content in reviewedContents {
+            for content in relevantContents {
                 responseMarkdown += "- \(content.url.absoluteString)\n"
             }
 
@@ -915,7 +748,7 @@ public struct SearchOrchestratorStep: Step, Sendable {
             var fallback = "# \(objective)\n\n"
             fallback += collectedInfo
             fallback += "\n\n## 参照ソース\n"
-            for content in reviewedContents {
+            for content in relevantContents {
                 fallback += "- \(content.url.absoluteString)\n"
             }
             return fallback

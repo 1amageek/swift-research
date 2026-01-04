@@ -1,16 +1,56 @@
 import Foundation
 
-/// クローラーのエラー
+// MARK: - CrawlerError
+
+/// Errors that can occur during crawling operations.
+///
+/// This enum covers all error cases that may arise during the research process,
+/// including network failures, configuration issues, and operational timeouts.
+///
+/// ## Topics
+///
+/// ### Search Errors
+/// - ``searchFailed(_:)``
+/// - ``noURLsFound``
+/// - ``invalidURL(_:)``
+///
+/// ### Fetch Errors
+/// - ``fetchFailed(_:_:)``
+/// - ``timeout``
+///
+/// ### Configuration Errors
+/// - ``modelUnavailable``
+/// - ``invalidConfiguration(_:)``
+///
+/// ### Operational Errors
+/// - ``cancelled``
 public enum CrawlerError: Error, Sendable {
+    /// Search operation failed with the specified message.
     case searchFailed(String)
+
+    /// Failed to fetch content from the specified URL.
     case fetchFailed(URL, String)
+
+    /// The language model is not available.
     case modelUnavailable
+
+    /// Invalid configuration with the specified details.
     case invalidConfiguration(String)
+
+    /// The operation timed out.
     case timeout
+
+    /// No URLs were found in the search results.
     case noURLsFound
+
+    /// The specified URL string is invalid.
     case invalidURL(String)
+
+    /// The operation was cancelled.
     case cancelled
 }
+
+// MARK: - LocalizedError
 
 extension CrawlerError: LocalizedError {
     public var errorDescription: String? {

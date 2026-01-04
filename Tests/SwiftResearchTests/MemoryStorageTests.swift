@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import AgenticCrawler
+@testable import SwiftResearch
 
 @Suite("MemoryStorage Tests")
 struct MemoryStorageTests {

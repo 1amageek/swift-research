@@ -1,14 +1,48 @@
 import Foundation
 
-/// クロール候補（優先度スコア付きURL）
+// MARK: - CrawlCandidate
+
+/// A URL candidate for crawling with priority score.
+///
+/// Candidates are prioritized by their score for efficient crawling.
+/// Higher scores indicate higher relevance to the research objective.
+///
+/// ## Topics
+///
+/// ### Properties
+/// - ``url``
+/// - ``score``
+/// - ``title``
+/// - ``reason``
+/// - ``sourceURL``
+/// - ``addedAt``
 public struct CrawlCandidate: Sendable, Comparable {
+    /// The URL to crawl.
     public let url: URL
-    public let score: Double          // 0.0〜1.0（高いほど優先）
+
+    /// Priority score between 0.0 and 1.0. Higher values indicate higher priority.
+    public let score: Double
+
+    /// The link title, if available.
     public let title: String?
-    public let reason: String?        // スコアの理由
-    public let sourceURL: URL?        // このリンクを発見したページ
+
+    /// The reason for the assigned score.
+    public let reason: String?
+
+    /// The URL of the page where this link was discovered.
+    public let sourceURL: URL?
+
+    /// The timestamp when this candidate was added.
     public let addedAt: Date
 
+    /// Creates a new crawl candidate.
+    ///
+    /// - Parameters:
+    ///   - url: The URL to crawl.
+    ///   - score: Priority score (0.0-1.0). Values outside this range are clamped.
+    ///   - title: The link title, if available.
+    ///   - reason: The reason for the assigned score.
+    ///   - sourceURL: The URL where this link was discovered.
     public init(
         url: URL,
         score: Double,
@@ -24,11 +58,13 @@ public struct CrawlCandidate: Sendable, Comparable {
         self.addedAt = Date()
     }
 
-    // 高いスコアが優先
+    /// Compares candidates by score. Higher scores are considered "less than" for priority queue ordering.
     public static func < (lhs: CrawlCandidate, rhs: CrawlCandidate) -> Bool {
         lhs.score > rhs.score
     }
 }
+
+// MARK: - Hashable
 
 extension CrawlCandidate: Hashable {
     public static func == (lhs: CrawlCandidate, rhs: CrawlCandidate) -> Bool {
@@ -40,23 +76,53 @@ extension CrawlCandidate: Hashable {
     }
 }
 
-/// クロール候補スタック（優先度順）
+// MARK: - CrawlCandidateStack
+
+/// A priority-ordered stack of crawl candidates.
+///
+/// This actor maintains a sorted list of candidates, with higher-scored candidates
+/// appearing first. Duplicate URLs are automatically rejected.
+///
+/// ## Topics
+///
+/// ### Adding Candidates
+/// - ``push(_:)-7x1qk``
+/// - ``push(_:)-5qr7l``
+///
+/// ### Retrieving Candidates
+/// - ``pop()``
+/// - ``pop(count:)``
+/// - ``peek(count:)``
+///
+/// ### Inspection
+/// - ``contains(_:)``
+/// - ``count``
+/// - ``isEmpty``
 public actor CrawlCandidateStack {
 
     private var candidates: [CrawlCandidate] = []
     private var urlSet: Set<URL> = []
 
+    /// Creates an empty candidate stack.
     public init() {}
 
-    /// 候補を追加（優先度順にソート）
+    /// Adds a candidate to the stack, maintaining priority order.
+    ///
+    /// Duplicate URLs are silently ignored.
+    ///
+    /// - Parameter candidate: The candidate to add.
     public func push(_ candidate: CrawlCandidate) {
         guard !urlSet.contains(candidate.url) else { return }
         urlSet.insert(candidate.url)
         candidates.append(candidate)
-        candidates.sort()  // 高スコア順
+        candidates.sort()
     }
 
-    /// 複数の候補を追加
+    /// Adds multiple candidates to the stack.
+    ///
+    /// Duplicate URLs are silently ignored.
+    ///
+    /// - Parameter newCandidates: The candidates to add.
     public func push(_ newCandidates: [CrawlCandidate]) {
         for candidate in newCandidates {
             if !urlSet.contains(candidate.url) {
@@ -67,7 +133,9 @@ public actor CrawlCandidateStack {
         candidates.sort()
     }
 
-    /// 最高優先度の候補を取り出す
+    /// Removes and returns the highest-priority candidate.
+    ///
+    /// - Returns: The highest-priority candidate, or `nil` if the stack is empty.
     public func pop() -> CrawlCandidate? {
         guard !candidates.isEmpty else { return nil }
         let candidate = candidates.removeFirst()
@@ -75,7 +143,12 @@ public actor CrawlCandidateStack {
         return candidate
     }
 
-    /// 上位N件を取り出す（並列処理用）
+    /// Removes and returns the top N highest-priority candidates.
+    ///
+    /// Useful for parallel processing of multiple candidates.
+    ///
+    /// - Parameter count: The maximum number of candidates to retrieve.
+    /// - Returns: An array of candidates, up to the specified count.
     public func pop(count: Int) -> [CrawlCandidate] {
         let n = min(count, candidates.count)
         guard n > 0 else { return [] }
@@ -88,19 +161,29 @@ public actor CrawlCandidateStack {
         return result
     }
 
-    /// 上位N件を確認（取り出さない）
+    /// Returns the top N highest-priority candidates without removing them.
+    ///
+    /// - Parameter count: The maximum number of candidates to peek.
+    /// - Returns: An array of candidates, up to the specified count.
     public func peek(count: Int) -> [CrawlCandidate] {
         Array(candidates.prefix(count))
     }
 
-    /// URLが存在するか確認
+    /// Checks whether a URL exists in the stack.
+    ///
+    /// - Parameter url: The URL to check.
+    /// - Returns: `true` if the URL is in the stack.
     public func contains(_ url: URL) -> Bool {
         urlSet.contains(url)
     }
 
+    /// The number of candidates in the stack.
     public var count: Int { candidates.count }
+
+    /// Whether the stack is empty.
     public var isEmpty: Bool { candidates.isEmpty }
 
+    /// Removes all candidates from the stack.
     public func clear() {
         candidates.removeAll()
         urlSet.removeAll()

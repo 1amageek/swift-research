@@ -1,10 +1,18 @@
 import Foundation
 
-/// クローラーへの入力
+/// Input for the crawler containing URLs and research objective.
 public struct CrawlerInput: Sendable {
+    /// The URLs to crawl.
     public let urls: [URL]
+
+    /// The research objective.
     public let objective: String
 
+    /// Creates a new crawler input.
+    ///
+    /// - Parameters:
+    ///   - urls: The URLs to crawl.
+    ///   - objective: The research objective.
     public init(
         urls: [URL],
         objective: String
@@ -14,46 +22,64 @@ public struct CrawlerInput: Sendable {
     }
 }
 
-/// クローラーの設定
+/// Configuration for the crawler.
+///
+/// Contains crawler-specific settings like search engine and domain filtering.
+/// LLM configuration is handled externally via LanguageModelSession.
 public struct CrawlerConfiguration: Sendable {
+    /// The search engine to use for keyword searches.
     public let searchEngine: SearchEngine
-    public let maxSearchResults: Int
+
+    /// Delay between HTTP requests.
     public let requestDelay: Duration
-    public let modelName: String
-    public let baseURL: URL
-    public let timeout: TimeInterval
+
+    /// Domains to allow. If `nil`, all domains are allowed.
     public let allowedDomains: [String]?
+
+    /// Domains to block.
     public let blockedDomains: [String]
 
+    /// The underlying research configuration.
+    public let researchConfiguration: ResearchConfiguration
+
+    /// Creates a new crawler configuration.
+    ///
+    /// - Parameters:
+    ///   - searchEngine: The search engine to use. Defaults to DuckDuckGo.
+    ///   - requestDelay: Delay between requests. Defaults to 500ms.
+    ///   - allowedDomains: Domains to allow. Defaults to `nil` (all allowed).
+    ///   - blockedDomains: Domains to block. Defaults to empty.
+    ///   - researchConfiguration: The research configuration to use.
     public init(
         searchEngine: SearchEngine = .duckDuckGo,
-        maxSearchResults: Int = 5,
         requestDelay: Duration = .milliseconds(500),
-        modelName: String = "gpt-oss:20b",
-        baseURL: URL = URL(string: "http://127.0.0.1:11434")!,
-        timeout: TimeInterval = 300.0,
         allowedDomains: [String]? = nil,
-        blockedDomains: [String] = []
+        blockedDomains: [String] = [],
+        researchConfiguration: ResearchConfiguration = .shared
     ) {
         self.searchEngine = searchEngine
-        self.maxSearchResults = maxSearchResults
         self.requestDelay = requestDelay
-        self.modelName = modelName
-        self.baseURL = baseURL
-        self.timeout = timeout
         self.allowedDomains = allowedDomains
         self.blockedDomains = blockedDomains
+        self.researchConfiguration = researchConfiguration
     }
 
+    /// The default configuration.
     public static let `default` = CrawlerConfiguration()
 }
 
-/// 検索エンジン
+/// Supported search engines for keyword searches.
 public enum SearchEngine: Sendable {
+    /// DuckDuckGo search engine.
     case duckDuckGo
+    /// Google search engine.
     case google
+    /// Bing search engine.
     case bing
 
+    /// The URL template for search queries.
+    ///
+    /// Use `%@` as a placeholder for the URL-encoded query string.
     public var searchURLTemplate: String {
         switch self {
         case .duckDuckGo:
@@ -65,6 +91,10 @@ public enum SearchEngine: Sendable {
         }
     }
 
+    /// Creates a search URL for the given query.
+    ///
+    /// - Parameter query: The search query string.
+    /// - Returns: The search URL, or `nil` if the query cannot be encoded.
     public func searchURL(for query: String) -> URL? {
         guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
             return nil

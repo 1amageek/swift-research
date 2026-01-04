@@ -2,16 +2,23 @@ import Foundation
 import SwiftAgent
 import RemarkKit
 
-/// キーワード検索の入力
+/// Input for keyword search.
 public struct KeywordSearchInput: Sendable {
+    /// The keyword to search for.
     public let keyword: String
 
+    /// Creates a new keyword search input.
+    ///
+    /// - Parameter keyword: The keyword to search for.
     public init(keyword: String) {
         self.keyword = keyword
     }
 }
 
-/// 検索エンジンを使用してキーワードからURLリストを取得するStep
+/// A step that performs keyword search and returns a list of URLs.
+///
+/// Uses the configured search engine to find relevant pages and filters
+/// the results to exclude blocked domains and search engine internal links.
 public struct SearchStep: Step, Sendable {
     public typealias Input = KeywordSearchInput
     public typealias Output = [URL]
@@ -19,6 +26,11 @@ public struct SearchStep: Step, Sendable {
     private let searchEngine: SearchEngine
     private let blockedDomains: Set<String>
 
+    /// Creates a new search step.
+    ///
+    /// - Parameters:
+    ///   - searchEngine: The search engine to use.
+    ///   - blockedDomains: Domains to exclude from results.
     public init(
         searchEngine: SearchEngine = .duckDuckGo,
         blockedDomains: [String] = []
@@ -34,46 +46,41 @@ public struct SearchStep: Step, Sendable {
 
         printFlush("🔍 Searching: \(input.keyword)")
 
-        // Remarkで検索結果ページを取得
         let remark = try await Remark.fetch(from: searchURL)
-
-        // リンクを抽出
         let links = try remark.extractLinks()
 
-        // URLをフィルタリングして返却
         var seenURLs: Set<URL> = []
         let urls = links
             .compactMap { URL(string: $0.url) }
             .filter { url in
-                // 検索エンジン自体のURLは除外
                 guard let host = url.host else { return false }
 
-                // ブロックリストに含まれるドメインは除外
+                // Exclude blocked domains
                 if blockedDomains.contains(where: { host.contains($0) }) {
                     return false
                 }
 
-                // 検索エンジンの内部リンクは除外（パターンマッチで全TLD対応）
+                // Exclude search engine internal links
                 let internalDomainPatterns = [
-                    "duckduckgo.",   // duckduckgo.com, etc.
-                    ".google.",      // www.google.com, www.google.co.jp, etc.
-                    "google.com",    // google.com直接
-                    ".bing.",        // www.bing.com, etc.
-                    "bing.com",      // bing.com直接
-                    "yahoo.com",     // yahoo.com
-                    ".yahoo.",       // search.yahoo.co.jp, etc.
-                    "yandex.",       // yandex.ru, yandex.com, etc.
-                    "baidu.com",     // baidu.com
+                    "duckduckgo.",
+                    ".google.",
+                    "google.com",
+                    ".bing.",
+                    "bing.com",
+                    "yahoo.com",
+                    ".yahoo.",
+                    "yandex.",
+                    "baidu.com",
                 ]
                 if internalDomainPatterns.contains(where: { host.contains($0) }) {
                     return false
                 }
 
-                // HTTPSのみ許可
+                // Only allow HTTPS
                 return url.scheme == "https"
             }
             .filter { url in
-                // 重複除去（順序を保持）
+                // Remove duplicates while preserving order
                 if seenURLs.contains(url) {
                     return false
                 }
@@ -94,7 +101,10 @@ public struct SearchStep: Step, Sendable {
 // MARK: - Convenience Extensions
 
 extension SearchStep {
-    /// 設定から SearchStep を作成
+    /// Creates a search step from a crawler configuration.
+    ///
+    /// - Parameter configuration: The crawler configuration.
+    /// - Returns: A configured search step.
     public static func from(configuration: CrawlerConfiguration) -> SearchStep {
         SearchStep(
             searchEngine: configuration.searchEngine,

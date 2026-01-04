@@ -3,6 +3,10 @@ import ArgumentParser
 import SwiftResearch
 import RemarkKit
 
+#if !USE_FOUNDATION_MODELS
+import OpenFoundationModelsOllama
+#endif
+
 @main
 struct ResearchCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -17,7 +21,7 @@ struct ResearchCLI: AsyncParsableCommand {
 // MARK: - Test Commands for Individual Steps
 
 extension ResearchCLI {
-    /// SearchStepのテスト: キーワード → URL一覧
+    /// Test SearchStep: keyword → URL list
     struct TestSearch: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "test-search",
@@ -46,7 +50,7 @@ extension ResearchCLI {
         }
     }
 
-    /// Remarkでのフェッチテスト: URL → Markdown
+    /// Test Remark fetch: URL → Markdown
     struct TestFetch: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "test-fetch",
@@ -107,8 +111,16 @@ extension ResearchCLI {
         @Option(name: .long, help: "Maximum URLs to visit (safety limit)")
         var limit: Int = 50
 
+        #if !USE_FOUNDATION_MODELS
         @Option(name: .long, help: "Ollama model name")
         var model: String = "gpt-oss:20b"
+
+        @Option(name: .long, help: "Ollama base URL")
+        var baseURL: String = "http://127.0.0.1:11434"
+
+        @Option(name: .long, help: "Request timeout in seconds")
+        var timeout: Double = 300.0
+        #endif
 
         @Option(name: .long, help: "Output format (text, json)")
         var format: OutputFormat = .text
@@ -120,29 +132,29 @@ extension ResearchCLI {
         var log: String?
 
         func run() async throws {
-            // 目的を取得（引数がなければ入力を求める）
+            // Get objective (prompt if not provided)
             let finalObjective: String
             if let obj = objective, !obj.isEmpty {
                 finalObjective = obj
             } else {
-                print("🎯 調査目的を入力してください:")
+                print("🎯 Enter research objective:")
                 print("> ", terminator: "")
                 guard let input = readLine(), !input.isEmpty else {
-                    print("❌ 目的が入力されませんでした")
+                    print("❌ No objective provided")
                     throw ExitCode.failure
                 }
                 finalObjective = input
             }
 
-            let configuration = CrawlerConfiguration(
-                modelName: model
-            )
+            // Create language model session
+            let session = try createSession()
 
-            // ログファイルを設定
+            let configuration = CrawlerConfiguration()
+
+            // Set up log file
             let logFileURL: URL?
             if let logPath = log {
                 logFileURL = URL(fileURLWithPath: logPath)
-                // ファイルを作成/クリア
                 try? "".write(to: logFileURL!, atomically: true, encoding: .utf8)
                 print("📝 Logging to: \(logPath)")
             } else {
@@ -150,8 +162,9 @@ extension ResearchCLI {
             }
 
             let orchestrator = SearchOrchestratorStep(
+                session: session,
                 configuration: configuration,
-                verbose: verbose || (log != nil),  // ログ指定時はverbose有効
+                verbose: verbose || (log != nil),
                 logFileURL: logFileURL
             )
 
@@ -166,6 +179,29 @@ extension ResearchCLI {
             }
 
             outputAggregatedResult(result, format: format)
+        }
+
+        private func createSession() throws -> LanguageModelSession {
+            #if USE_FOUNDATION_MODELS
+            let model = SystemLanguageModel()
+            return LanguageModelSession(model: model, tools: [], instructions: nil as String?)
+            #else
+            guard let baseURLParsed = URL(string: baseURL) else {
+                print("❌ Invalid base URL: \(baseURL)")
+                throw ExitCode.failure
+            }
+
+            let ollamaConfig = OllamaConfiguration(
+                baseURL: baseURLParsed,
+                timeout: timeout,
+                keepAlive: "10m"
+            )
+            let ollamaModel = OllamaLanguageModel(
+                configuration: ollamaConfig,
+                modelName: model
+            )
+            return LanguageModelSession(model: ollamaModel, tools: [], instructions: nil as String?)
+            #endif
         }
     }
 }
@@ -208,7 +244,7 @@ func outputTextAggregatedResult(_ result: AggregatedResult) {
     print("   • Duration: \(formatDuration(result.statistics.duration))")
     print("")
 
-    // 最終レスポンスを表示
+    // Display final response
     if !result.responseMarkdown.isEmpty {
         print("📝 Response:")
         print("───────────────────────────────────────────")
@@ -216,7 +252,7 @@ func outputTextAggregatedResult(_ result: AggregatedResult) {
         print("")
     }
 
-    // レビュー済みコンテンツを表示
+    // Display reviewed contents
     let topContents = result.reviewedContents.prefix(5)
 
     if !topContents.isEmpty {

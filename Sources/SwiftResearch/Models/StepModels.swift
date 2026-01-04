@@ -2,12 +2,16 @@ import Foundation
 
 // MARK: - Phase 1: Objective Analysis Result
 
-/// 目的分析の内部結果（@Generableではない通常の構造体）
-/// 参考: AMD Framework (arXiv:2502.08557) - ソクラテス的質問による分解
+/// Internal result of objective analysis (non-Generable struct).
+///
+/// Reference: AMD Framework (arXiv:2502.08557) - Socratic questioning decomposition
 public struct ObjectiveAnalysis: Sendable {
+    /// Search keywords extracted from the objective.
     public let keywords: [String]
-    public let questions: [String]        // ソクラテス的質問（明確化・前提検証・含意探索）
-    public let successCriteria: [String]  // 充足判定条件
+    /// Socratic questions (clarification, assumption testing, implication exploration).
+    public let questions: [String]
+    /// Criteria for determining sufficient information.
+    public let successCriteria: [String]
 
     public init(
         keywords: [String],
@@ -19,31 +23,36 @@ public struct ObjectiveAnalysis: Sendable {
         self.successCriteria = successCriteria
     }
 
-    /// ObjectiveAnalysisResponseから変換
+    /// Converts from ObjectiveAnalysisResponse.
     public init(from response: ObjectiveAnalysisResponse) {
         self.keywords = response.keywords
         self.questions = response.questions
         self.successCriteria = response.successCriteria
     }
 
-    /// フォールバック用
+    /// Creates a fallback analysis when LLM fails.
     public static func fallback(objective: String) -> ObjectiveAnalysis {
         ObjectiveAnalysis(
             keywords: [objective],
             questions: [objective],
-            successCriteria: ["関連情報が見つかる"]
+            successCriteria: ["Find relevant information"]
         )
     }
 }
 
 // MARK: - Phase 3: Content Review Result
 
-/// コンテンツレビューの内部結果（@Generableではない通常の構造体）
-/// 情報抽出に集中（問い検証はPhase 4で一括実施）
+/// Internal result of content review (non-Generable struct).
+///
+/// Focuses on information extraction. Question verification is performed in Phase 4.
 public struct ContentReview: Sendable {
+    /// Whether the content is relevant to the objective.
     public let isRelevant: Bool
+    /// Extracted relevant information.
     public let extractedInfo: String
+    /// Whether deep crawling should be performed.
     public let shouldDeepCrawl: Bool
+    /// Priority links for deep crawling.
     public let priorityLinks: [PriorityLink]
 
     public init(
@@ -58,7 +67,7 @@ public struct ContentReview: Sendable {
         self.priorityLinks = priorityLinks
     }
 
-    /// ContentReviewResponseから変換
+    /// Converts from ContentReviewResponse.
     public init(from response: ContentReviewResponse) {
         self.isRelevant = response.isRelevant
         self.extractedInfo = response.extractedInfo
@@ -66,7 +75,7 @@ public struct ContentReview: Sendable {
         self.priorityLinks = response.priorityLinks
     }
 
-    /// フォールバック（無関連として扱う）
+    /// Creates a fallback as irrelevant content.
     public static func irrelevant() -> ContentReview {
         ContentReview(
             isRelevant: false,
@@ -79,12 +88,17 @@ public struct ContentReview: Sendable {
 
 // MARK: - ReviewedContent
 
-/// レビュー済みコンテンツ（Phase 3の出力）
-/// 情報抽出結果のみ保持（問い検証はPhase 4で実施）
+/// Reviewed content output from Phase 3.
+///
+/// Contains only extraction results. Question verification is performed in Phase 4.
 public struct ReviewedContent: Sendable {
+    /// The URL of the reviewed content.
     public let url: URL
+    /// The page title, if available.
     public let title: String?
-    public let extractedInfo: String  // 抽出した関連情報（簡潔）
+    /// Extracted relevant information (concise).
+    public let extractedInfo: String
+    /// Whether the content is relevant.
     public let isRelevant: Bool
 
     public init(
@@ -102,11 +116,15 @@ public struct ReviewedContent: Sendable {
 
 // MARK: - Internal Sufficiency Result
 
-/// 情報充足度の内部結果（@Generableではない通常の構造体）
+/// Internal result of sufficiency check (non-Generable struct).
 public struct SufficiencyResult: Sendable {
+    /// Whether sufficient information has been collected.
     public let isSufficient: Bool
+    /// Whether further information gathering is futile.
     public let shouldGiveUp: Bool
+    /// Additional keywords to search if insufficient.
     public let additionalKeywords: [String]
+    /// Reason for the decision in Markdown format.
     public let reasonMarkdown: String
 
     public init(
@@ -121,7 +139,7 @@ public struct SufficiencyResult: Sendable {
         self.reasonMarkdown = reasonMarkdown
     }
 
-    /// SufficiencyCheckResponseから変換
+    /// Converts from SufficiencyCheckResponse.
     public init(from response: SufficiencyCheckResponse) {
         self.isSufficient = response.isSufficient
         self.shouldGiveUp = response.shouldGiveUp
@@ -129,7 +147,7 @@ public struct SufficiencyResult: Sendable {
         self.reasonMarkdown = response.reasonMarkdown
     }
 
-    /// 不足状態のデフォルト
+    /// Creates an insufficient result.
     public static func insufficient(reason: String) -> SufficiencyResult {
         SufficiencyResult(
             isSufficient: false,
@@ -139,7 +157,7 @@ public struct SufficiencyResult: Sendable {
         )
     }
 
-    /// 諦め状態
+    /// Creates a give-up result.
     public static func giveUp(reason: String) -> SufficiencyResult {
         SufficiencyResult(
             isSufficient: false,
@@ -152,10 +170,11 @@ public struct SufficiencyResult: Sendable {
 
 // MARK: - SearchOrchestratorStep Models
 
-/// 検索オーケストレーターへの入力
+/// Input for the search orchestrator.
 public struct SearchQuery: Sendable {
+    /// The research objective.
     public let objective: String
-    /// 訪問URL数の上限（セーフティリミット）
+    /// Maximum number of URLs to visit (safety limit).
     public let maxVisitedURLs: Int
 
     public init(objective: String, maxVisitedURLs: Int = 100) {
@@ -164,14 +183,21 @@ public struct SearchQuery: Sendable {
     }
 }
 
-/// 検索オーケストレーターからの出力（統合結果）
+/// Output from the search orchestrator (aggregated result).
 public struct AggregatedResult: Sendable {
+    /// The original research objective.
     public let objective: String
-    public let questions: [String]                 // Phase 1: ソクラテス的質問
-    public let successCriteria: [String]           // Phase 1: 充足判定条件
-    public let reviewedContents: [ReviewedContent] // Phase 3: レビュー済みコンテンツ
-    public let responseMarkdown: String            // Phase 5: 最終応答
+    /// Socratic questions from Phase 1.
+    public let questions: [String]
+    /// Success criteria from Phase 1.
+    public let successCriteria: [String]
+    /// Reviewed contents from Phase 3.
+    public let reviewedContents: [ReviewedContent]
+    /// Final response from Phase 5.
+    public let responseMarkdown: String
+    /// Keywords used during search.
     public let keywordsUsed: [String]
+    /// Aggregated statistics.
     public let statistics: AggregatedStatistics
 
     public init(
@@ -193,11 +219,15 @@ public struct AggregatedResult: Sendable {
     }
 }
 
-/// 統合統計情報
+/// Aggregated statistics from the research session.
 public struct AggregatedStatistics: Sendable {
-    public let totalPagesVisited: Int   // 訪問したページ総数
-    public let relevantPagesFound: Int  // 関連コンテンツ数
+    /// Total number of pages visited.
+    public let totalPagesVisited: Int
+    /// Number of relevant pages found.
+    public let relevantPagesFound: Int
+    /// Number of keywords used.
     public let keywordsUsed: Int
+    /// Total duration of the research.
     public let duration: Duration
 
     public init(
