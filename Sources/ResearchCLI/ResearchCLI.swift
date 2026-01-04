@@ -3,7 +3,7 @@ import ArgumentParser
 import SwiftResearch
 import RemarkKit
 
-#if !USE_FOUNDATION_MODELS
+#if USE_OTHER_MODELS
 import OpenFoundationModelsOllama
 #endif
 
@@ -111,7 +111,7 @@ extension ResearchCLI {
         @Option(name: .long, help: "Maximum URLs to visit (safety limit)")
         var limit: Int = 50
 
-        #if !USE_FOUNDATION_MODELS
+        #if USE_OTHER_MODELS
         @Option(name: .long, help: "Ollama model name")
         var model: String = "gpt-oss:20b"
 
@@ -182,10 +182,7 @@ extension ResearchCLI {
         }
 
         private func createSession() throws -> LanguageModelSession {
-            #if USE_FOUNDATION_MODELS
-            let model = SystemLanguageModel()
-            return LanguageModelSession(model: model, tools: [], instructions: nil as String?)
-            #else
+            #if USE_OTHER_MODELS
             guard let baseURLParsed = URL(string: baseURL) else {
                 print("❌ Invalid base URL: \(baseURL)")
                 throw ExitCode.failure
@@ -201,6 +198,9 @@ extension ResearchCLI {
                 modelName: model
             )
             return LanguageModelSession(model: ollamaModel, tools: [], instructions: nil as String?)
+            #else
+            let model = SystemLanguageModel()
+            return LanguageModelSession(model: model, tools: [], instructions: nil as String?)
             #endif
         }
     }
