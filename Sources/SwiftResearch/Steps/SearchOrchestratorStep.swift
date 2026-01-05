@@ -491,10 +491,10 @@ public struct SearchOrchestratorStep: Step, Sendable {
         - 含意探索: 何が導かれるか？
 
         ### 3. 成功基準（successCriteria）
-        情報収集が十分と判断するための具体的な条件。
-        - 目的の複雑さに応じて必要な数だけ列挙
-        - 「〜が判明した」「〜を確認できた」のように具体的・検証可能に記述
-        - 曖昧な表現（detailed, comprehensive, thorough等）は使用禁止
+        情報収集が十分と判断するための具体的な条件を詳細にリスト化。
+        - 目的を達成するために必要な情報項目を全て列挙
+        - 具体的な属性名を明記する
+
         """
 
         if verbose {
