@@ -26,6 +26,92 @@ internal func printFlush(_ items: Any..., separator: String = " ", terminator: S
     }
 }
 
+// MARK: - Error Classification
+
+/// Represents the type of fetch error for retry logic.
+enum FetchErrorType: Sendable {
+    case timeout
+    case networkConnection
+    case httpError(statusCode: Int)
+    case cancelled
+    case parsing
+    case unknown
+
+    /// Whether this error type should be retried.
+    var isRetryable: Bool {
+        switch self {
+        case .timeout, .networkConnection:
+            return true
+        case .httpError(let statusCode):
+            // Retry on 5xx server errors, but not on 4xx client errors
+            return statusCode >= 500
+        case .cancelled, .parsing, .unknown:
+            return false
+        }
+    }
+
+    /// Human-readable description of the error type.
+    var description: String {
+        switch self {
+        case .timeout:
+            return "timeout"
+        case .networkConnection:
+            return "network connection"
+        case .httpError(let statusCode):
+            return "HTTP \(statusCode)"
+        case .cancelled:
+            return "cancelled"
+        case .parsing:
+            return "parsing"
+        case .unknown:
+            return "unknown"
+        }
+    }
+}
+
+/// Classifies an error into a FetchErrorType for retry logic.
+func classifyFetchError(_ error: Error) -> FetchErrorType {
+    // Check for CancellationError (from our timeout mechanism)
+    if error is CancellationError {
+        return .timeout
+    }
+
+    // Check error description for Remark's ValidationError timeout
+    let errorDescription = String(describing: error).lowercased()
+    if errorDescription.contains("timeout") || errorDescription.contains("timed out") {
+        return .timeout
+    }
+
+    // Check NSError for network errors
+    let nsError = error as NSError
+
+    // NSURLErrorDomain error codes
+    switch nsError.code {
+    case -1001: // NSURLErrorTimedOut
+        return .timeout
+    case -1009, // NSURLErrorNotConnectedToInternet
+         -1004, // NSURLErrorCannotConnectToHost
+         -1005, // NSURLErrorNetworkConnectionLost
+         -1020: // NSURLErrorDataNotAllowed
+        return .networkConnection
+    default:
+        break
+    }
+
+    // Check for HTTP status errors in userInfo
+    if nsError.userInfo["NSErrorFailingURLKey"] is URL,
+       let statusCode = nsError.userInfo["_kCFStreamErrorCodeKey"] as? Int {
+        return .httpError(statusCode: statusCode)
+    }
+
+    // Check for SwiftSoup parsing errors
+    if errorDescription.contains("parse") || errorDescription.contains("swiftsoup") {
+        return .parsing
+    }
+
+    return .unknown
+}
+
 /// Orchestrates the complete research workflow from search to response generation.
 ///
 /// The workflow consists of 5 phases:
@@ -42,14 +128,21 @@ internal func printFlush(_ items: Any..., separator: String = " ", terminator: S
 /// let orchestrator = SearchOrchestratorStep(session: session)
 /// let result = try await orchestrator.run(SearchQuery(objective: "..."))
 /// ```
+/// Factory closure for creating LanguageModelSession instances.
+///
+/// Used when LLM does not support concurrent requests.
+public typealias SessionFactory = @Sendable () -> LanguageModelSession
+
 public struct SearchOrchestratorStep: Step, Sendable {
     public typealias Input = SearchQuery
     public typealias Output = AggregatedResult
 
     private let session: LanguageModelSession
+    private let sessionFactory: SessionFactory?
     private let configuration: CrawlerConfiguration
     private let verbose: Bool
     private let logFileURL: URL?
+    private let progressContinuation: AsyncStream<CrawlProgress>.Continuation?
 
     /// Creates a new search orchestrator step.
     ///
@@ -65,9 +158,82 @@ public struct SearchOrchestratorStep: Step, Sendable {
         logFileURL: URL? = nil
     ) {
         self.session = session
+        self.sessionFactory = nil
         self.configuration = configuration
         self.verbose = verbose
         self.logFileURL = logFileURL
+        self.progressContinuation = nil
+    }
+
+    /// Creates a new search orchestrator step with progress reporting.
+    ///
+    /// - Parameters:
+    ///   - session: The language model session to use for LLM operations.
+    ///   - configuration: The crawler configuration.
+    ///   - verbose: Whether to output verbose logging.
+    ///   - logFileURL: Optional file URL to write logs to.
+    ///   - progressContinuation: Continuation to send progress updates.
+    public init(
+        session: LanguageModelSession,
+        configuration: CrawlerConfiguration = .default,
+        verbose: Bool = false,
+        logFileURL: URL? = nil,
+        progressContinuation: AsyncStream<CrawlProgress>.Continuation?
+    ) {
+        self.session = session
+        self.sessionFactory = nil
+        self.configuration = configuration
+        self.verbose = verbose
+        self.logFileURL = logFileURL
+        self.progressContinuation = progressContinuation
+    }
+
+    /// Creates a new search orchestrator step with a session factory.
+    ///
+    /// Use this initializer when the LLM does not support concurrent requests.
+    /// Each worker will create its own session using the factory.
+    ///
+    /// - Parameters:
+    ///   - session: The language model session for non-parallel operations (Phase 1, 4, 5).
+    ///   - sessionFactory: Factory to create worker-specific sessions for Phase 3.
+    ///   - configuration: The crawler configuration.
+    ///   - verbose: Whether to output verbose logging.
+    ///   - logFileURL: Optional file URL to write logs to.
+    ///   - progressContinuation: Continuation to send progress updates.
+    public init(
+        session: LanguageModelSession,
+        sessionFactory: @escaping SessionFactory,
+        configuration: CrawlerConfiguration = .default,
+        verbose: Bool = false,
+        logFileURL: URL? = nil,
+        progressContinuation: AsyncStream<CrawlProgress>.Continuation? = nil
+    ) {
+        self.session = session
+        self.sessionFactory = sessionFactory
+        self.configuration = configuration
+        self.verbose = verbose
+        self.logFileURL = logFileURL
+        self.progressContinuation = progressContinuation
+    }
+
+    /// Sends a progress update if continuation is available.
+    private func sendProgress(_ progress: CrawlProgress) {
+        progressContinuation?.yield(progress)
+    }
+
+    /// Creates a session for a worker.
+    ///
+    /// If `llmSupportsConcurrency` is true or no factory is provided, returns the shared session.
+    /// Otherwise, creates a new session using the factory.
+    private func createWorkerSession() -> LanguageModelSession {
+        if configuration.researchConfiguration.llmSupportsConcurrency {
+            return session
+        }
+        if let factory = sessionFactory {
+            return factory()
+        }
+        // Fallback: return shared session (may cause errors with non-concurrent LLMs)
+        return session
     }
 
     public func run(_ input: SearchQuery) async throws -> AggregatedResult {
@@ -91,14 +257,19 @@ public struct SearchOrchestratorStep: Step, Sendable {
         printFlush("maxVisitedURLs: \(input.maxVisitedURLs)")
         printFlush("")
 
+        sendProgress(.started(objective: input.objective))
+
         // ===== Phase 1: Objective Analysis =====
         printFlush("═══════════════════════════════════════════")
         printFlush("📊 Phase 1: OBJECTIVE ANALYSIS")
         printFlush("═══════════════════════════════════════════")
+        sendProgress(.phaseChanged(phase: .analyzing))
         let phase1Start = Date()
         let analysis = await analyzeObjective(objective: input.objective)
         let phase1Duration = Date().timeIntervalSince(phase1Start)
         printFlush("⏱️ Phase 1 duration: \(String(format: "%.1f", phase1Duration))s")
+
+        sendProgress(.keywordsGenerated(keywords: analysis.keywords))
 
         if verbose {
             printFlush("keywords: \(analysis.keywords)")
@@ -144,6 +315,8 @@ public struct SearchOrchestratorStep: Step, Sendable {
             printFlush("═══════════════════════════════════════════")
             printFlush("🔍 Phase 2: SEARCH [\(keyword)]")
             printFlush("═══════════════════════════════════════════")
+            sendProgress(.phaseChanged(phase: .searching))
+            sendProgress(.searchStarted(keyword: keyword))
             let phase2Start = Date()
 
             let searchStep = SearchStep(
@@ -156,6 +329,7 @@ public struct SearchOrchestratorStep: Step, Sendable {
                 urls = try await searchStep.run(KeywordSearchInput(keyword: keyword))
             } catch {
                 printFlush("⚠️ Search failed for '\(keyword)': \(error)")
+                sendProgress(.error(message: "Search failed for '\(keyword)': \(error)"))
                 continue
             }
 
@@ -169,12 +343,15 @@ public struct SearchOrchestratorStep: Step, Sendable {
                 printFlush("  [\(i+1)] \(url.absoluteString)")
             }
 
+            sendProgress(.urlsFound(keyword: keyword, urls: filteredURLs))
+
             // Add URLs to queue
             context.enqueueURLs(filteredURLs)
             printFlush("Queue: \(context.queueCount) URLs (after dedup)")
             printFlush("")
 
             // ===== Phase 3: Parallel Content Review =====
+            sendProgress(.phaseChanged(phase: .reviewing))
             await parallelContentReview(context: context)
 
             // ===== Phase 4: Sufficiency Check =====
@@ -182,6 +359,7 @@ public struct SearchOrchestratorStep: Step, Sendable {
             printFlush("═══════════════════════════════════════════")
             printFlush("✓ Phase 4: SUFFICIENCY CHECK")
             printFlush("═══════════════════════════════════════════")
+            sendProgress(.phaseChanged(phase: .checkingSufficiency))
             let phase4Start = Date()
 
             let newRelevantThisRound = context.relevantCount - previousRelevantCount
@@ -197,10 +375,16 @@ public struct SearchOrchestratorStep: Step, Sendable {
             let phase4Duration = Date().timeIntervalSince(phase4Start)
             printFlush("⏱️ Phase 4 duration: \(String(format: "%.1f", phase4Duration))s")
 
+            sendProgress(.sufficiencyChecked(isSufficient: sufficiency.isSufficient, reason: sufficiency.reasonMarkdown))
+
+            // Update success criteria with refined version from Phase 4
+            context.updateSuccessCriteria(sufficiency.successCriteria)
+
             if verbose {
                 printFlush("isSufficient: \(sufficiency.isSufficient)")
                 printFlush("shouldGiveUp: \(sufficiency.shouldGiveUp)")
                 printFlush("additionalKeywords: \(sufficiency.additionalKeywords)")
+                printFlush("successCriteria: \(sufficiency.successCriteria)")
                 printFlush("reason: \(sufficiency.reasonMarkdown.prefix(200))...")
             }
             printFlush("")
@@ -219,6 +403,7 @@ public struct SearchOrchestratorStep: Step, Sendable {
                 }
                 if !newKeywords.isEmpty {
                     printFlush("→ Adding \(newKeywords.count) new keywords: \(newKeywords)")
+                    sendProgress(.additionalKeywords(keywords: newKeywords))
                     pendingKeywords.append(contentsOf: newKeywords)
                 }
             }
@@ -229,19 +414,25 @@ public struct SearchOrchestratorStep: Step, Sendable {
         printFlush("═══════════════════════════════════════════")
         printFlush("📝 Phase 5: RESPONSE BUILDING")
         printFlush("═══════════════════════════════════════════")
+        sendProgress(.phaseChanged(phase: .buildingResponse))
+        sendProgress(.buildingResponse)
         let phase5Start = Date()
 
         let reviewedContents = context.reviewedContents
+        let relevantExcerpts = context.getRelevantContext()
         if verbose {
             printFlush("input reviewedContents: \(reviewedContents.count) items")
+            printFlush("input relevantExcerpts: \(relevantExcerpts.count) pages with excerpts")
             for (i, c) in reviewedContents.prefix(10).enumerated() {
                 printFlush("  [\(i+1)] \(c.url.host ?? "?"): \(c.extractedInfo.prefix(60))...")
             }
         }
 
         let responseMarkdown = await buildFinalResponse(
+            relevantExcerpts: relevantExcerpts,
             reviewedContents: reviewedContents,
-            objective: input.objective
+            objective: input.objective,
+            questions: analysis.questions
         )
 
         let phase5Duration = Date().timeIntervalSince(phase5Start)
@@ -262,6 +453,9 @@ public struct SearchOrchestratorStep: Step, Sendable {
         printFlush("   Visited: \(statistics.totalPagesVisited), Relevant: \(statistics.relevantPagesFound)")
         printFlush("   Keywords: \(statistics.keywordsUsed)")
         printFlush("   Duration: \(String(format: "%.1f", endTime.timeIntervalSince(startTime)))s")
+
+        sendProgress(.phaseChanged(phase: .completed))
+        sendProgress(.completed(statistics: statistics))
 
         return AggregatedResult(
             objective: input.objective,
@@ -297,8 +491,10 @@ public struct SearchOrchestratorStep: Step, Sendable {
         - 含意探索: 何が導かれるか？
 
         ### 3. 成功基準（successCriteria）
-        情報収集が十分と判断する条件を2〜3個。
-        - 具体的で検証可能な基準
+        情報収集が十分と判断するための具体的な条件。
+        - 目的の複雑さに応じて必要な数だけ列挙
+        - 「〜が判明した」「〜を確認できた」のように具体的・検証可能に記述
+        - 曖昧な表現（detailed, comprehensive, thorough等）は使用禁止
         """
 
         if verbose {
@@ -307,6 +503,8 @@ public struct SearchOrchestratorStep: Step, Sendable {
             printFlush("└─── END LLM INPUT ───")
             printFlush("")
         }
+
+        sendProgress(.promptSent(phase: "Phase 1: Objective Analysis", prompt: prompt))
 
         do {
             let response = try await session.respond(generating: ObjectiveAnalysisResponse.self) {
@@ -331,12 +529,12 @@ public struct SearchOrchestratorStep: Step, Sendable {
 
             let uniqueKeywords = Array(Set(rawAnalysis.keywords)).prefix(5)
             let uniqueQuestions = Array(Set(rawAnalysis.questions)).prefix(5)
-            let uniqueCriteria = Array(Set(rawAnalysis.successCriteria)).prefix(3)
+            let uniqueCriteria = Array(Set(rawAnalysis.successCriteria))
 
             return ObjectiveAnalysis(
                 keywords: Array(uniqueKeywords),
                 questions: Array(uniqueQuestions),
-                successCriteria: Array(uniqueCriteria)
+                successCriteria: uniqueCriteria
             )
         } catch {
             printFlush("⚠️ Objective analysis failed: \(error)")
@@ -357,7 +555,9 @@ public struct SearchOrchestratorStep: Step, Sendable {
         await withTaskGroup(of: Void.self) { group in
             for workerID in 0..<context.maxConcurrent {
                 group.addTask {
-                    await self.worker(id: workerID, context: context)
+                    // Each worker gets its own session when LLM doesn't support concurrency
+                    let workerSession = self.createWorkerSession()
+                    await self.worker(id: workerID, context: context, session: workerSession)
                 }
             }
         }
@@ -369,7 +569,7 @@ public struct SearchOrchestratorStep: Step, Sendable {
         printFlush("⏱️ Phase 3 total: \(String(format: "%.1f", phase3Duration))s")
     }
 
-    private func worker(id: Int, context: CrawlContext) async {
+    private func worker(id: Int, context: CrawlContext, session workerSession: LanguageModelSession) async {
         while let url = context.dequeueURL() {
             // Process until dequeueURL() returns nil
             // (isSufficient/maxURLs/empty queue checks are performed atomically in dequeueURL)
@@ -378,7 +578,9 @@ public struct SearchOrchestratorStep: Step, Sendable {
             let host = url.host ?? url.absoluteString
             printFlush("   [W\(id)] → \(host)")
 
-            let result = await fetchAndReview(url: url, context: context)
+            sendProgress(.urlProcessingStarted(url: url))
+
+            let result = await fetchAndReview(url: url, context: context, session: workerSession)
 
             context.completeURL(url)
 
@@ -386,6 +588,17 @@ public struct SearchOrchestratorStep: Step, Sendable {
 
             if let result = result {
                 context.addResult(result.reviewed)
+
+                // Send progress update for processed URL
+                let processResult = URLProcessResult(
+                    url: url,
+                    title: result.reviewed.title,
+                    extractedInfo: result.reviewed.extractedInfo,
+                    isRelevant: result.reviewed.isRelevant,
+                    duration: pageDuration,
+                    status: .success
+                )
+                sendProgress(.urlProcessed(result: processResult))
 
                 // Add deep crawl URLs to queue
                 if let deepURLs = result.deepURLs, !deepURLs.isEmpty {
@@ -397,6 +610,16 @@ public struct SearchOrchestratorStep: Step, Sendable {
                 let info = result.reviewed.extractedInfo.prefix(60)
                 printFlush("   [W\(id)] \(status) \(String(format: "%.1fs", pageDuration)) \(info)...")
             } else {
+                // Send progress update for failed URL
+                let processResult = URLProcessResult(
+                    url: url,
+                    title: nil,
+                    extractedInfo: "",
+                    isRelevant: false,
+                    duration: pageDuration,
+                    status: .failed
+                )
+                sendProgress(.urlProcessed(result: processResult))
                 printFlush("   [W\(id)] ✗ \(String(format: "%.1fs", pageDuration)) fetch failed")
             }
 
@@ -414,14 +637,16 @@ public struct SearchOrchestratorStep: Step, Sendable {
         let llmDuration: TimeInterval
     }
 
-    private func fetchAndReview(url: URL, context: CrawlContext) async -> FetchReviewResult? {
-        // Fetch with timeout
-        let fetchStart = Date()
-        let remark: Remark
-        let links: [Link]
+    /// Fetch result containing the Remark and links, or error information.
+    private enum FetchResult {
+        case success(remark: Remark, links: [Link])
+        case failure(errorType: FetchErrorType, error: Error)
+    }
 
+    /// Attempts to fetch content from a URL with a timeout.
+    private func attemptFetch(url: URL) async -> FetchResult {
         do {
-            remark = try await withThrowingTaskGroup(of: Remark.self) { group in
+            let remark = try await withThrowingTaskGroup(of: Remark.self) { group in
                 group.addTask {
                     try await Remark.fetch(from: url)
                 }
@@ -433,14 +658,86 @@ public struct SearchOrchestratorStep: Step, Sendable {
                 group.cancelAll()
                 return result
             }
-            links = try remark.extractLinks()
+            let links = try remark.extractLinks()
+            return .success(remark: remark, links: links)
         } catch {
-            if verbose {
-                printFlush("   ⚠️ Fetch failed: \(url.absoluteString) - \(error)")
-            }
-            return nil
+            let errorType = classifyFetchError(error)
+            return .failure(errorType: errorType, error: error)
         }
-        let fetchDuration = Date().timeIntervalSince(fetchStart)
+    }
+
+    private func fetchAndReview(url: URL, context: CrawlContext, session workerSession: LanguageModelSession) async -> FetchReviewResult? {
+        let fetchStart = Date()
+        let remark: Remark
+        let links: [Link]
+
+        // Retry configuration
+        let maxRetries = 2
+        var lastErrorType: FetchErrorType = .unknown
+
+        // Attempt fetch with retries
+        for attempt in 0...maxRetries {
+            if attempt > 0 {
+                // Exponential backoff: 1s, 2s, 4s
+                let delay = Double(1 << (attempt - 1))
+                printFlush("   ↻ Retry \(attempt)/\(maxRetries) after \(String(format: "%.0f", delay))s delay")
+                try? await Task.sleep(for: .seconds(delay))
+            }
+
+            let result = await attemptFetch(url: url)
+
+            switch result {
+            case .success(let fetchedRemark, let fetchedLinks):
+                remark = fetchedRemark
+                links = fetchedLinks
+                // Successfully fetched, continue to review
+                let fetchDuration = Date().timeIntervalSince(fetchStart)
+                return await processFetchedContent(
+                    remark: remark,
+                    links: links,
+                    url: url,
+                    context: context,
+                    session: workerSession,
+                    fetchDuration: fetchDuration
+                )
+
+            case .failure(let errorType, let error):
+                lastErrorType = errorType
+
+                // Only retry if error is retryable and we haven't exhausted retries
+                if errorType.isRetryable && attempt < maxRetries {
+                    if verbose {
+                        printFlush("   ⚠️ Fetch failed (\(errorType.description)), will retry: \(url.host ?? url.absoluteString)")
+                    }
+                    continue
+                } else {
+                    // Final failure - log with error type
+                    printFlush("   ✗ Fetch failed (\(errorType.description)): \(url.host ?? url.absoluteString)")
+                    if verbose {
+                        printFlush("      Error: \(error)")
+                    }
+                    return nil
+                }
+            }
+        }
+
+        // Should not reach here, but just in case
+        printFlush("   ✗ Fetch exhausted retries (\(lastErrorType.description)): \(url.host ?? url.absoluteString)")
+        return nil
+    }
+
+    /// Process fetched content through LLM review.
+    private func processFetchedContent(
+        remark: Remark,
+        links: [Link],
+        url: URL,
+        context: CrawlContext,
+        session workerSession: LanguageModelSession,
+        fetchDuration: TimeInterval
+    ) async -> FetchReviewResult? {
+
+        // Store full markdown for use in Phase 5
+        context.storePageContent(url: url, markdown: remark.markdown)
 
         // Get known facts to improve review accuracy
         let knownFacts = context.getKnownFacts()
@@ -455,15 +752,27 @@ public struct SearchOrchestratorStep: Step, Sendable {
             sourceURL: url,
             objective: context.objective,
             knownFacts: knownFacts,
-            relevantDomains: relevantDomains
+            relevantDomains: relevantDomains,
+            session: workerSession
         )
         let llmDuration = Date().timeIntervalSince(llmStart)
+
+        // Extract excerpts from relevantRanges
+        let markdownLines = remark.markdown.components(separatedBy: "\n")
+        let excerpts = review.relevantRanges.compactMap { range -> String? in
+            let safeStart = max(0, range.lowerBound)
+            let safeEnd = min(markdownLines.count, range.upperBound)
+            guard safeStart < safeEnd else { return nil }
+            return markdownLines[safeStart..<safeEnd].joined(separator: "\n")
+        }
 
         let reviewed = ReviewedContent(
             url: url,
             title: remark.title.isEmpty ? nil : remark.title,
             extractedInfo: review.extractedInfo,
-            isRelevant: review.isRelevant
+            isRelevant: review.isRelevant,
+            relevantRanges: review.relevantRanges,
+            excerpts: excerpts
         )
 
         // Extract deep crawl URLs if not already sufficient
@@ -492,10 +801,18 @@ public struct SearchOrchestratorStep: Step, Sendable {
         sourceURL: URL,
         objective: String,
         knownFacts: [String],
-        relevantDomains: Set<String>
+        relevantDomains: Set<String>,
+        session workerSession: LanguageModelSession
     ) async -> ContentReview {
         let maxChars = configuration.researchConfiguration.contentMaxChars
-        let truncatedContent = String(markdown.prefix(maxChars))
+
+        // Add line numbers to markdown for relevantRanges extraction
+        let lines = markdown.components(separatedBy: "\n")
+        let numberedLines = lines.enumerated().map { index, line in
+            "\(index): \(line)"
+        }
+        let numberedContent = numberedLines.joined(separator: "\n")
+        let truncatedContent = String(numberedContent.prefix(maxChars))
 
         let linksInfo = links.prefix(5).enumerated().map { index, link in
             "[\(index + 1)] \(link.text.isEmpty ? "-" : String(link.text.prefix(30))) -> \(link.url)"
@@ -514,17 +831,18 @@ public struct SearchOrchestratorStep: Step, Sendable {
         \(objective)
         \(knownFactsSection)
 
-        ## ページ: \(title)
+        ## ページ: \(title)（行番号付き）
         \(truncatedContent)
 
         ## リンク
         \(linksInfo)
 
-        ## 出力（簡潔に）
+        ## 出力
         - isRelevant: 新しい関連情報があるか
-        - extractedInfo: 関連情報（100-150字、既知と重複しない）
+        - extractedInfo: 関連情報の要約（100-150字、既知と重複しない）
         - shouldDeepCrawl: 深掘りすべきか
-        - priorityLinks: 深掘り候補（最大2件）
+        - priorityLinks: 深掘り候補のリンク
+        - relevantRanges: 関連情報が含まれる行範囲（start: 開始行, end: 終了行）
         """
 
         if verbose {
@@ -537,7 +855,7 @@ public struct SearchOrchestratorStep: Step, Sendable {
         }
 
         do {
-            let response = try await session.respond(generating: ContentReviewResponse.self) {
+            let response = try await workerSession.respond(generating: ContentReviewResponse.self) {
                 Prompt(prompt)
             }
 
@@ -547,6 +865,7 @@ public struct SearchOrchestratorStep: Step, Sendable {
                 printFlush("    extractedInfo: \(response.content.extractedInfo)")
                 printFlush("    shouldDeepCrawl: \(response.content.shouldDeepCrawl)")
                 printFlush("    priorityLinks: \(response.content.priorityLinks.count) items")
+                printFlush("    relevantRanges: \(response.content.relevantRanges.map { "\($0.start)..<\($0.end)" })")
                 printFlush("    └─── END LLM OUTPUT ───")
             }
 
@@ -620,11 +939,12 @@ public struct SearchOrchestratorStep: Step, Sendable {
 
         let prompt = """
         あなたは情報充足度を判断するエージェントです。
+        収集した情報の完全性を分析し、情報ギャップを特定してください。
 
         ## 目的
         \(context.objective)
 
-        ## 成功基準
+        ## 現在の成功基準
         \(criteriaList)
 
         ## 検索履歴
@@ -635,19 +955,33 @@ public struct SearchOrchestratorStep: Step, Sendable {
         ## これまでに収集した情報
         \(collectedInfo)
 
-        ## 判断基準
+        ## あなたの任務
 
-        1. isSufficient: ユーザーが目的を達成できる状態か？
-           - 一次情報源（公式サイト、ドキュメント等）が見つかった
-           - 目的に対する概要や主要情報が把握できた
+        ### 1. Self-reflection: 情報の完全性分析
+        各成功基準について、収集した情報がどの程度その基準を満たしているかを評価してください。
+        - 完全に満たしている
+        - 部分的に満たしている（何が不足か明記）
+        - まだ情報がない
 
-        2. shouldGiveUp: これ以上の情報収集は困難か？
-           - このラウンドで新規関連ページが0件だった
-           - 複数ラウンド経過しても情報が増えていない
+        ### 2. isSufficient（十分か？）
+        全ての成功基準が満たされていればtrue。
 
-        3. additionalKeywords: 本当に不足している場合のみ追加（最大2個）
+        ### 3. shouldGiveUp（諦めるか？）
+        - このラウンドで新規関連ページが0件
+        - 複数ラウンド経過しても情報が増えていない
 
-        4. reasonMarkdown: 判断理由（簡潔に）
+        ### 4. additionalKeywords（追加キーワード）
+        情報ギャップを埋めるための具体的な検索キーワード（最大2個）。
+        前回の検索結果から得た洞察を活用して、より精密なクエリを構築。
+
+        ### 5. reasonMarkdown（判断理由）
+        各成功基準の達成状況と、残っている情報ギャップを簡潔に記述。
+
+        ### 6. successCriteria（精緻化された成功基準）
+        収集した情報により成功基準を事後更新してください。
+        - 曖昧だった基準は収集した情報を基に具体化
+        - 新たな情報から必要と判明した基準は追加
+        - 変更がなければ現在の基準をそのまま返す        
         """
 
         if verbose {
@@ -659,6 +993,8 @@ public struct SearchOrchestratorStep: Step, Sendable {
             printFlush("└─── END LLM INPUT ───")
             printFlush("")
         }
+
+        sendProgress(.promptSent(phase: "Phase 4: Sufficiency Check", prompt: prompt))
 
         do {
             let response = try await session.respond(generating: SufficiencyCheckResponse.self) {
@@ -684,44 +1020,73 @@ public struct SearchOrchestratorStep: Step, Sendable {
     // MARK: - Phase 5: Response Building
 
     private func buildFinalResponse(
+        relevantExcerpts: [CrawlContext.PageExcerpt],
         reviewedContents: [ReviewedContent],
-        objective: String
+        objective: String,
+        questions: [String]
     ) async -> String {
-        guard !reviewedContents.isEmpty else {
+        let relevantContents = reviewedContents.filter { $0.isRelevant }
+
+        guard !relevantContents.isEmpty else {
             return "# \(objective)\n\n関連情報を収集できませんでした。"
         }
 
-        let relevantContents = reviewedContents.filter { $0.isRelevant }
+        // Build context from relevant excerpts (actual page content, not just summaries)
+        var contextSection = ""
+        for excerpt in relevantExcerpts {
+            let title = excerpt.title ?? excerpt.url.absoluteString
+            contextSection += "### \(title)\n"
+            contextSection += "URL: \(excerpt.url.absoluteString)\n\n"
+            for excerptText in excerpt.excerpts {
+                contextSection += excerptText + "\n\n"
+            }
+            contextSection += "---\n\n"
+        }
 
-        let collectedInfo = relevantContents.enumerated().map { index, content in
-            "[\(index + 1)] \(content.url.host ?? "unknown"): \(content.extractedInfo)"
-        }.joined(separator: "\n")
+        // Fallback to extractedInfo if no excerpts available
+        if contextSection.isEmpty {
+            contextSection = relevantContents.enumerated().map { index, content in
+                "[\(index + 1)] \(content.url.host ?? "unknown"): \(content.extractedInfo)"
+            }.joined(separator: "\n")
+        }
+
+        let questionsSection = questions.isEmpty ? "" : """
+
+        ## 回答すべき具体的な質問
+        \(questions.map { "- \($0)" }.joined(separator: "\n"))
+        """
 
         let prompt = """
-        あなたはレポートを作成する専門家です。
+        あなたは調査結果を報告する専門家です。
 
-        ## 目的
+        ## ユーザーの問い
         \(objective)
+        \(questionsSection)
 
-        ## 収集した情報
-        \(collectedInfo)
+        ## 収集した情報（関連部分のみ抽出）
+        \(contextSection)
 
-        ## あなたの任務
+        ## 指示
+        上記の情報を使って、ユーザーの問いに直接回答してください。
 
-        収集した情報に基づいて、目的に対する包括的な回答をMarkdown形式で作成してください。
-
-        - 具体的な情報とエビデンスを含める
-        - 読みやすい構造で記述
+        - 具体的なエビデンスを示す
+        - 情報源を明記する
+        - 不明な点や情報が不足している点は正直に述べる
+        - Markdown形式で読みやすく構造化する
         - ソースURLは後でシステムが追加するため、参照リストは含めない
         """
 
         if verbose {
             printFlush("┌─── LLM INPUT (FinalResponse) ───")
             printFlush("objective: \(objective)")
-            printFlush("collectedInfo: \(relevantContents.count) items")
+            printFlush("questions: \(questions)")
+            printFlush("relevantExcerpts: \(relevantExcerpts.count) pages")
+            printFlush("contextSection: \(contextSection.count) chars")
             printFlush("└─── END LLM INPUT ───")
             printFlush("")
         }
+
+        sendProgress(.promptSent(phase: "Phase 5: Response Building", prompt: prompt))
 
         do {
             let response = try await session.respond(generating: FinalResponseBuildingResponse.self) {
@@ -746,7 +1111,7 @@ public struct SearchOrchestratorStep: Step, Sendable {
         } catch {
             printFlush("⚠️ Response building failed: \(error)")
             var fallback = "# \(objective)\n\n"
-            fallback += collectedInfo
+            fallback += contextSection
             fallback += "\n\n## 参照ソース\n"
             for content in relevantContents {
                 fallback += "- \(content.url.absoluteString)\n"

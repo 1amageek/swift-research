@@ -149,7 +149,16 @@ extension ResearchCLI {
             // Create language model session
             let session = try createSession()
 
-            let configuration = CrawlerConfiguration()
+            // Configure based on LLM type
+            #if USE_OTHER_MODELS
+            // API-based models support concurrent requests
+            let researchConfig = ResearchConfiguration(llmSupportsConcurrency: true)
+            #else
+            // SystemLanguageModel does NOT support concurrent requests
+            let researchConfig = ResearchConfiguration(llmSupportsConcurrency: false)
+            #endif
+
+            let configuration = CrawlerConfiguration(researchConfiguration: researchConfig)
 
             // Set up log file
             let logFileURL: URL?
@@ -161,12 +170,26 @@ extension ResearchCLI {
                 logFileURL = nil
             }
 
+            #if USE_OTHER_MODELS
             let orchestrator = SearchOrchestratorStep(
                 session: session,
                 configuration: configuration,
                 verbose: verbose || (log != nil),
                 logFileURL: logFileURL
             )
+            #else
+            // Provide session factory for non-concurrent LLM
+            let orchestrator = SearchOrchestratorStep(
+                session: session,
+                sessionFactory: {
+                    let model = SystemLanguageModel()
+                    return LanguageModelSession(model: model, tools: [], instructions: nil as String?)
+                },
+                configuration: configuration,
+                verbose: verbose || (log != nil),
+                logFileURL: logFileURL
+            )
+            #endif
 
             let query = SearchQuery(objective: finalObjective, maxVisitedURLs: limit)
 

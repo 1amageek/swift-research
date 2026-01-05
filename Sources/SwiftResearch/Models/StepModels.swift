@@ -54,17 +54,21 @@ public struct ContentReview: Sendable {
     public let shouldDeepCrawl: Bool
     /// Priority links for deep crawling.
     public let priorityLinks: [PriorityLink]
+    /// Line ranges where relevant information is located.
+    public let relevantRanges: [Range<Int>]
 
     public init(
         isRelevant: Bool,
         extractedInfo: String,
         shouldDeepCrawl: Bool,
-        priorityLinks: [PriorityLink]
+        priorityLinks: [PriorityLink],
+        relevantRanges: [Range<Int>] = []
     ) {
         self.isRelevant = isRelevant
         self.extractedInfo = extractedInfo
         self.shouldDeepCrawl = shouldDeepCrawl
         self.priorityLinks = priorityLinks
+        self.relevantRanges = relevantRanges
     }
 
     /// Converts from ContentReviewResponse.
@@ -73,6 +77,10 @@ public struct ContentReview: Sendable {
         self.extractedInfo = response.extractedInfo
         self.shouldDeepCrawl = response.shouldDeepCrawl
         self.priorityLinks = response.priorityLinks
+        self.relevantRanges = response.relevantRanges.compactMap { range in
+            guard range.start >= 0 && range.end > range.start else { return nil }
+            return range.start..<range.end
+        }
     }
 
     /// Creates a fallback as irrelevant content.
@@ -81,7 +89,8 @@ public struct ContentReview: Sendable {
             isRelevant: false,
             extractedInfo: "",
             shouldDeepCrawl: false,
-            priorityLinks: []
+            priorityLinks: [],
+            relevantRanges: []
         )
     }
 }
@@ -100,17 +109,26 @@ public struct ReviewedContent: Sendable {
     public let extractedInfo: String
     /// Whether the content is relevant.
     public let isRelevant: Bool
+    /// Line ranges where relevant information is located.
+    public let relevantRanges: [Range<Int>]
+    /// Actual text excerpts extracted from the relevant ranges.
+    /// These are the text chunks used as context in Phase 5.
+    public let excerpts: [String]
 
     public init(
         url: URL,
         title: String?,
         extractedInfo: String,
-        isRelevant: Bool
+        isRelevant: Bool,
+        relevantRanges: [Range<Int>] = [],
+        excerpts: [String] = []
     ) {
         self.url = url
         self.title = title
         self.extractedInfo = extractedInfo
         self.isRelevant = isRelevant
+        self.relevantRanges = relevantRanges
+        self.excerpts = excerpts
     }
 }
 
@@ -126,17 +144,21 @@ public struct SufficiencyResult: Sendable {
     public let additionalKeywords: [String]
     /// Reason for the decision in Markdown format.
     public let reasonMarkdown: String
+    /// Current success criteria (may be updated from original).
+    public let successCriteria: [String]
 
     public init(
         isSufficient: Bool,
         shouldGiveUp: Bool = false,
         additionalKeywords: [String] = [],
-        reasonMarkdown: String = ""
+        reasonMarkdown: String = "",
+        successCriteria: [String] = []
     ) {
         self.isSufficient = isSufficient
         self.shouldGiveUp = shouldGiveUp
         self.additionalKeywords = additionalKeywords
         self.reasonMarkdown = reasonMarkdown
+        self.successCriteria = successCriteria
     }
 
     /// Converts from SufficiencyCheckResponse.
@@ -145,6 +167,7 @@ public struct SufficiencyResult: Sendable {
         self.shouldGiveUp = response.shouldGiveUp
         self.additionalKeywords = response.additionalKeywords
         self.reasonMarkdown = response.reasonMarkdown
+        self.successCriteria = response.successCriteria
     }
 
     /// Creates an insufficient result.
@@ -153,7 +176,8 @@ public struct SufficiencyResult: Sendable {
             isSufficient: false,
             shouldGiveUp: false,
             additionalKeywords: [],
-            reasonMarkdown: reason
+            reasonMarkdown: reason,
+            successCriteria: []
         )
     }
 
@@ -163,7 +187,8 @@ public struct SufficiencyResult: Sendable {
             isSufficient: false,
             shouldGiveUp: true,
             additionalKeywords: [],
-            reasonMarkdown: reason
+            reasonMarkdown: reason,
+            successCriteria: []
         )
     }
 }

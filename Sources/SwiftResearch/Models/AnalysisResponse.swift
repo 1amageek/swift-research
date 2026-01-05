@@ -21,6 +21,16 @@ public struct ObjectiveAnalysisResponse: Sendable {
 
 // MARK: - Phase 3: Content Review
 
+/// Line range indicating where relevant information is located.
+@Generable
+public struct RelevantRange: Sendable {
+    @Guide(description: "関連情報の開始行番号")
+    public let start: Int
+
+    @Guide(description: "関連情報の終了行番号")
+    public let end: Int
+}
+
 /// Response from content review.
 ///
 /// Focuses on information extraction. Question verification is performed in Phase 4.
@@ -35,8 +45,11 @@ public struct ContentReviewResponse: Sendable {
     @Guide(description: "さらに深掘りすべきリンクがあるか")
     public let shouldDeepCrawl: Bool
 
-    @Guide(description: "深掘り候補のリンク（最大3件）")
+    @Guide(description: "深掘り候補のリンク")
     public let priorityLinks: [PriorityLink]
+
+    @Guide(description: "関連情報が含まれる行範囲")
+    public let relevantRanges: [RelevantRange]
 }
 
 /// Priority link information for deep crawling.
@@ -88,6 +101,9 @@ public struct SufficiencyCheckResponse: Sendable {
 
     @Guide(description: "判断理由（Markdown形式）")
     public let reasonMarkdown: String
+
+    @Guide(description: "現在有効な成功基準（必要に応じて追加・削除・修正したもの）")
+    public let successCriteria: [String]
 }
 
 // MARK: - Phase 5: Response Building

@@ -40,6 +40,10 @@ public struct ResearchConfiguration: Sendable {
         public static let knownFactsLimit = 5
         /// Default maximum content characters for review.
         public static let contentMaxChars = 1500
+        /// Whether the LLM supports concurrent requests.
+        /// SystemLanguageModel (FoundationModels) does NOT support concurrent requests.
+        /// API-based models (Ollama, OpenAI, etc.) typically DO support concurrent requests.
+        public static let llmSupportsConcurrency = false
     }
 
     // MARK: - Properties
@@ -56,6 +60,12 @@ public struct ResearchConfiguration: Sendable {
     /// Maximum content length (in characters) sent to LLM for review.
     public let contentMaxChars: Int
 
+    /// Whether the LLM supports concurrent requests.
+    ///
+    /// - `false` (default): Each worker creates its own session (for SystemLanguageModel/FoundationModels)
+    /// - `true`: Workers share a single session (for API-based models like Ollama, OpenAI)
+    public let llmSupportsConcurrency: Bool
+
     // MARK: - Initialization
 
     /// Creates a configuration by reading from environment variables.
@@ -68,6 +78,7 @@ public struct ResearchConfiguration: Sendable {
         self.maxURLs = Self.getInt(from: env, key: EnvironmentVariables.maxURLs, default: Defaults.maxURLs)
         self.knownFactsLimit = Self.getInt(from: env, key: EnvironmentVariables.knownFactsLimit, default: Defaults.knownFactsLimit)
         self.contentMaxChars = Self.getInt(from: env, key: EnvironmentVariables.contentMaxChars, default: Defaults.contentMaxChars)
+        self.llmSupportsConcurrency = Self.getBool(from: env, key: EnvironmentVariables.llmSupportsConcurrency, default: Defaults.llmSupportsConcurrency)
     }
 
     /// Creates a configuration with custom values.
@@ -77,16 +88,19 @@ public struct ResearchConfiguration: Sendable {
     ///   - maxURLs: Maximum URLs to process.
     ///   - knownFactsLimit: Number of known facts to share.
     ///   - contentMaxChars: Maximum content length for review.
+    ///   - llmSupportsConcurrency: Whether LLM supports concurrent requests.
     public init(
         maxConcurrent: Int = Defaults.maxConcurrent,
         maxURLs: Int = Defaults.maxURLs,
         knownFactsLimit: Int = Defaults.knownFactsLimit,
-        contentMaxChars: Int = Defaults.contentMaxChars
+        contentMaxChars: Int = Defaults.contentMaxChars,
+        llmSupportsConcurrency: Bool = Defaults.llmSupportsConcurrency
     ) {
         self.maxConcurrent = maxConcurrent
         self.maxURLs = maxURLs
         self.knownFactsLimit = knownFactsLimit
         self.contentMaxChars = contentMaxChars
+        self.llmSupportsConcurrency = llmSupportsConcurrency
     }
 
     // MARK: - Helper Methods
@@ -96,6 +110,13 @@ public struct ResearchConfiguration: Sendable {
             return defaultValue
         }
         return intValue
+    }
+
+    private static func getBool(from env: [String: String], key: String, default defaultValue: Bool) -> Bool {
+        guard let value = env[key]?.lowercased() else {
+            return defaultValue
+        }
+        return value == "true" || value == "1" || value == "yes"
     }
 
     // MARK: - Shared Instance
@@ -122,6 +143,9 @@ extension ResearchConfiguration {
 
         /// Maximum content characters: `CONTENT_MAX_CHARS`
         public static let contentMaxChars = "CONTENT_MAX_CHARS"
+
+        /// LLM supports concurrent requests: `LLM_SUPPORTS_CONCURRENCY`
+        public static let llmSupportsConcurrency = "LLM_SUPPORTS_CONCURRENCY"
     }
 }
 
@@ -135,6 +159,7 @@ extension ResearchConfiguration: CustomStringConvertible {
           maxURLs: \(maxURLs)
           knownFactsLimit: \(knownFactsLimit)
           contentMaxChars: \(contentMaxChars)
+          llmSupportsConcurrency: \(llmSupportsConcurrency)
         """
     }
 }
