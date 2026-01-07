@@ -1,4 +1,5 @@
 import Foundation
+import SwiftAgent
 
 /// Input for the crawler containing URLs and research objective.
 public struct CrawlerInput: Sendable {
@@ -26,6 +27,7 @@ public struct CrawlerInput: Sendable {
 ///
 /// Contains crawler-specific settings like search engine and domain filtering.
 /// LLM configuration is handled externally via LanguageModelSession.
+@Contextable
 public struct CrawlerConfiguration: Sendable {
     /// The search engine to use for keyword searches.
     public let searchEngine: SearchEngine
@@ -66,6 +68,9 @@ public struct CrawlerConfiguration: Sendable {
 
     /// The default configuration.
     public static let `default` = CrawlerConfiguration()
+
+    /// The default value for Contextable conformance.
+    public static var defaultValue: CrawlerConfiguration { .default }
 }
 
 /// Supported search engines for keyword searches.

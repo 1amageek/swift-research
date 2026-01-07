@@ -19,14 +19,28 @@ public struct KeywordSearchInput: Sendable {
 ///
 /// Uses the configured search engine to find relevant pages and filters
 /// the results to exclude blocked domains and search engine internal links.
+///
+/// Supports both explicit configuration and `@Context`-based configuration:
+///
+/// ```swift
+/// // Explicit configuration
+/// let step = SearchStep(searchEngine: .google, blockedDomains: ["example.com"])
+///
+/// // Context-based (uses CrawlerConfigContext)
+/// try await withContext(CrawlerConfigContext.self, value: config) {
+///     try await SearchStep().run(input)
+/// }
+/// ```
 public struct SearchStep: Step, Sendable {
     public typealias Input = KeywordSearchInput
     public typealias Output = [URL]
 
-    private let searchEngine: SearchEngine
-    private let blockedDomains: Set<String>
+    @Context private var contextConfig: CrawlerConfiguration
 
-    /// Creates a new search step.
+    private let explicitSearchEngine: SearchEngine?
+    private let explicitBlockedDomains: Set<String>?
+
+    /// Creates a new search step with explicit configuration.
     ///
     /// - Parameters:
     ///   - searchEngine: The search engine to use.
@@ -35,8 +49,26 @@ public struct SearchStep: Step, Sendable {
         searchEngine: SearchEngine = .duckDuckGo,
         blockedDomains: [String] = []
     ) {
-        self.searchEngine = searchEngine
-        self.blockedDomains = Set(blockedDomains)
+        self.explicitSearchEngine = searchEngine
+        self.explicitBlockedDomains = Set(blockedDomains)
+    }
+
+    /// Creates a new search step that uses `@Context` for configuration.
+    ///
+    /// Call within `withContext(CrawlerConfigContext.self, value:)` block.
+    public init() {
+        self.explicitSearchEngine = nil
+        self.explicitBlockedDomains = nil
+    }
+
+    /// The effective search engine (explicit or from context).
+    private var searchEngine: SearchEngine {
+        explicitSearchEngine ?? contextConfig.searchEngine
+    }
+
+    /// The effective blocked domains (explicit or from context).
+    private var blockedDomains: Set<String> {
+        explicitBlockedDomains ?? Set(contextConfig.blockedDomains)
     }
 
     public func run(_ input: KeywordSearchInput) async throws -> [URL] {

@@ -259,13 +259,40 @@ public struct SearchOrchestratorStep: Step, Sendable {
 
         sendProgress(.started(objective: input.objective))
 
+        // ===== Phase 0: Initial Search =====
+        printFlush("═══════════════════════════════════════════")
+        printFlush("🔎 Phase 0: INITIAL SEARCH")
+        printFlush("═══════════════════════════════════════════")
+        sendProgress(.phaseChanged(phase: .initialSearch))
+        let phase0Start = Date()
+
+        let initialSearchResult = await performInitialSearch(query: input.objective)
+
+        let phase0Duration = Date().timeIntervalSince(phase0Start)
+        printFlush("⏱️ Phase 0 duration: \(String(format: "%.1f", phase0Duration))s")
+        if let info = initialSearchResult.summary {
+            printFlush("Background info: \(info.prefix(200))...")
+        } else {
+            printFlush("No background info found (continuing without)")
+        }
+        printFlush("")
+
         // ===== Phase 1: Objective Analysis =====
         printFlush("═══════════════════════════════════════════")
         printFlush("📊 Phase 1: OBJECTIVE ANALYSIS")
         printFlush("═══════════════════════════════════════════")
         sendProgress(.phaseChanged(phase: .analyzing))
         let phase1Start = Date()
-        let analysis = await analyzeObjective(objective: input.objective)
+
+        let analysisInput = ObjectiveAnalysisInput(
+            objective: input.objective,
+            backgroundInfo: initialSearchResult.summary,
+            verbose: verbose
+        )
+        let analysis = try await ObjectiveAnalysisStep(progressContinuation: progressContinuation)
+            .session(session)
+            .run(analysisInput)
+
         let phase1Duration = Date().timeIntervalSince(phase1Start)
         printFlush("⏱️ Phase 1 duration: \(String(format: "%.1f", phase1Duration))s")
 
@@ -285,6 +312,13 @@ public struct SearchOrchestratorStep: Step, Sendable {
             maxURLs: input.maxVisitedURLs,
             configuration: configuration.researchConfiguration
         )
+
+        // Register Phase 0 visited URLs to avoid re-visiting
+        for url in initialSearchResult.visitedURLs {
+            context.enqueueURLs([url])
+            _ = context.dequeueURL()
+            context.completeURL(url)
+        }
 
         // ===== Phase 2-4 Loop =====
         var usedKeywords: [String] = []
@@ -364,11 +398,18 @@ public struct SearchOrchestratorStep: Step, Sendable {
 
             let newRelevantThisRound = context.relevantCount - previousRelevantCount
 
-            let sufficiency = await checkSufficiency(
-                context: context,
+            let sufficiencyInput = SufficiencyCheckInput(
+                objective: context.objective,
+                successCriteria: context.successCriteria,
+                reviewedContents: context.reviewedContents,
+                relevantCount: context.relevantCount,
                 searchRoundNumber: usedKeywords.count,
-                newRelevantThisRound: newRelevantThisRound
+                newRelevantThisRound: newRelevantThisRound,
+                verbose: verbose
             )
+            let sufficiency = try await SufficiencyCheckStep(progressContinuation: progressContinuation)
+                .session(session)
+                .run(sufficiencyInput)
 
             previousRelevantCount = context.relevantCount
 
@@ -428,12 +469,17 @@ public struct SearchOrchestratorStep: Step, Sendable {
             }
         }
 
-        let responseMarkdown = await buildFinalResponse(
+        let responseBuildingInput = ResponseBuildingInput(
             relevantExcerpts: relevantExcerpts,
             reviewedContents: reviewedContents,
             objective: input.objective,
-            questions: analysis.questions
+            questions: analysis.questions,
+            successCriteria: context.successCriteria,
+            verbose: verbose
         )
+        let responseMarkdown = try await ResponseBuildingStep(progressContinuation: progressContinuation)
+            .session(session)
+            .run(responseBuildingInput)
 
         let phase5Duration = Date().timeIntervalSince(phase5Start)
         printFlush("⏱️ Phase 5 duration: \(String(format: "%.1f", phase5Duration))s")
@@ -468,77 +514,79 @@ public struct SearchOrchestratorStep: Step, Sendable {
         )
     }
 
-    // MARK: - Phase 1: Objective Analysis
+    // MARK: - Phase 0: Initial Search
 
-    private func analyzeObjective(objective: String) async -> ObjectiveAnalysis {
-        let prompt = """
-        あなたは情報収集エージェントです。目的を分析してください。
+    /// Result of initial search containing summary and visited URLs.
+    private struct InitialSearchResult: Sendable {
+        let summary: String?
+        let visitedURLs: [URL]
+    }
 
-        ## 目的
-        \(objective)
+    /// Performs initial search to gather background information about the query.
+    private func performInitialSearch(query: String) async -> InitialSearchResult {
+        let searchStep = SearchStep(
+            searchEngine: configuration.searchEngine,
+            blockedDomains: configuration.blockedDomains
+        )
 
-        ## あなたの任務
-
-        ### 1. 検索キーワード（keywords）
-        目的を達成するための検索キーワードを3〜5個生成。
-        - 英語で記述
-        - 検索エンジン向け
-
-        ### 2. 具体的な問い（questions）
-        目的を達成するために答えるべき具体的な問いを3つ生成。
-        - 明確化: 何を意味しているか？
-        - 前提検証: 何を前提としているか？
-        - 含意探索: 何が導かれるか？
-
-        ### 3. 成功基準（successCriteria）
-        情報収集が十分と判断するための具体的な条件を詳細にリスト化。
-        - 目的を達成するために必要な情報項目を全て列挙
-        - 具体的な属性名を明記する
-
-        """
-
-        if verbose {
-            printFlush("┌─── LLM INPUT (ObjectiveAnalysis) ───")
-            printFlush(prompt)
-            printFlush("└─── END LLM INPUT ───")
-            printFlush("")
+        let urls: [URL]
+        do {
+            urls = try await searchStep.run(KeywordSearchInput(keyword: query))
+        } catch {
+            printFlush("⚠️ Initial search failed: \(error)")
+            return InitialSearchResult(summary: nil, visitedURLs: [])
         }
 
-        sendProgress(.promptSent(phase: "Phase 1: Objective Analysis", prompt: prompt))
+        let topURLs = Array(urls.filter { isAllowedDomain($0) }.prefix(2))
+        var summaries: [String] = []
+        var visitedURLs: [URL] = []
+
+        for url in topURLs {
+            visitedURLs.append(url)
+            do {
+                let remark = try await withThrowingTaskGroup(of: Remark.self) { group in
+                    group.addTask {
+                        try await Remark.fetch(from: url)
+                    }
+                    group.addTask {
+                        try await Task.sleep(for: .seconds(10))
+                        throw CancellationError()
+                    }
+                    let result = try await group.next()!
+                    group.cancelAll()
+                    return result
+                }
+
+                if let summary = await extractBasicInfo(markdown: remark.markdown, query: query) {
+                    summaries.append("【\(url.host ?? url.absoluteString)】\(summary)")
+                }
+            } catch {
+                printFlush("⚠️ Failed to fetch \(url.host ?? ""): \(error)")
+            }
+        }
+
+        let summary = summaries.isEmpty ? nil : summaries.joined(separator: "\n\n")
+        return InitialSearchResult(summary: summary, visitedURLs: visitedURLs)
+    }
+
+    /// Extracts basic information from markdown content.
+    private func extractBasicInfo(markdown: String, query: String) async -> String? {
+        let truncated = String(markdown.prefix(3000))
+
+        let prompt = """
+        以下のページから「\(query)」に関する基本情報を抽出してください。
+        100-200字程度で簡潔に要約してください。
+
+        \(truncated)
+        """
 
         do {
-            let response = try await session.respond(generating: ObjectiveAnalysisResponse.self) {
+            let response = try await session.respond {
                 Prompt(prompt)
             }
-
-            if verbose {
-                printFlush("┌─── LLM OUTPUT (ObjectiveAnalysis) ───")
-                printFlush("keywords: \(response.content.keywords)")
-                printFlush("questions: \(response.content.questions)")
-                printFlush("successCriteria: \(response.content.successCriteria)")
-                printFlush("└─── END LLM OUTPUT ───")
-                printFlush("")
-            }
-
-            let rawAnalysis = response.content
-
-            if rawAnalysis.keywords.isEmpty {
-                printFlush("⚠️ LLM returned empty keywords, using fallback")
-                return ObjectiveAnalysis.fallback(objective: objective)
-            }
-
-            let uniqueKeywords = Array(Set(rawAnalysis.keywords)).prefix(5)
-            let uniqueQuestions = Array(Set(rawAnalysis.questions)).prefix(5)
-            let uniqueCriteria = Array(Set(rawAnalysis.successCriteria))
-
-            return ObjectiveAnalysis(
-                keywords: Array(uniqueKeywords),
-                questions: Array(uniqueQuestions),
-                successCriteria: uniqueCriteria
-            )
+            return response.content
         } catch {
-            printFlush("⚠️ Objective analysis failed: \(error)")
-            return ObjectiveAnalysis.fallback(objective: objective)
+            return nil
         }
     }
 
@@ -557,7 +605,12 @@ public struct SearchOrchestratorStep: Step, Sendable {
                 group.addTask {
                     // Each worker gets its own session when LLM doesn't support concurrency
                     let workerSession = self.createWorkerSession()
-                    await self.worker(id: workerID, context: context, session: workerSession)
+                    // Use TaskLocal directly for implicit propagation to worker
+                    await SessionContext.$current.withValue(workerSession) {
+                        await CrawlerConfigurationContext.withValue(self.configuration) {
+                            await self.worker(id: workerID, context: context)
+                        }
+                    }
                 }
             }
         }
@@ -569,7 +622,7 @@ public struct SearchOrchestratorStep: Step, Sendable {
         printFlush("⏱️ Phase 3 total: \(String(format: "%.1f", phase3Duration))s")
     }
 
-    private func worker(id: Int, context: CrawlContext, session workerSession: LanguageModelSession) async {
+    private func worker(id: Int, context: CrawlContext) async {
         while let url = context.dequeueURL() {
             // Process until dequeueURL() returns nil
             // (isSufficient/maxURLs/empty queue checks are performed atomically in dequeueURL)
@@ -580,7 +633,7 @@ public struct SearchOrchestratorStep: Step, Sendable {
 
             sendProgress(.urlProcessingStarted(url: url))
 
-            let result = await fetchAndReview(url: url, context: context, session: workerSession)
+            let result = await fetchAndReview(url: url, context: context)
 
             context.completeURL(url)
 
@@ -666,7 +719,7 @@ public struct SearchOrchestratorStep: Step, Sendable {
         }
     }
 
-    private func fetchAndReview(url: URL, context: CrawlContext, session workerSession: LanguageModelSession) async -> FetchReviewResult? {
+    private func fetchAndReview(url: URL, context: CrawlContext) async -> FetchReviewResult? {
         let fetchStart = Date()
         let remark: Remark
         let links: [Link]
@@ -697,7 +750,6 @@ public struct SearchOrchestratorStep: Step, Sendable {
                     links: links,
                     url: url,
                     context: context,
-                    session: workerSession,
                     fetchDuration: fetchDuration
                 )
 
@@ -726,13 +778,12 @@ public struct SearchOrchestratorStep: Step, Sendable {
         return nil
     }
 
-    /// Process fetched content through LLM review.
+    /// Process fetched content through LLM review using ContentReviewStep.
     private func processFetchedContent(
         remark: Remark,
         links: [Link],
         url: URL,
         context: CrawlContext,
-        session workerSession: LanguageModelSession,
         fetchDuration: TimeInterval
     ) async -> FetchReviewResult? {
 
@@ -743,9 +794,9 @@ public struct SearchOrchestratorStep: Step, Sendable {
         let knownFacts = context.getKnownFacts()
         let relevantDomains = context.getRelevantDomains()
 
-        // Review
+        // Review using ContentReviewStep (uses @Session and @Context implicitly)
         let llmStart = Date()
-        let review = await reviewContent(
+        let reviewInput = ContentReviewInput(
             markdown: remark.markdown,
             title: remark.title,
             links: links,
@@ -753,8 +804,17 @@ public struct SearchOrchestratorStep: Step, Sendable {
             objective: context.objective,
             knownFacts: knownFacts,
             relevantDomains: relevantDomains,
-            session: workerSession
+            verbose: verbose
         )
+        let review: ContentReview
+        do {
+            review = try await ContentReviewStep().run(reviewInput)
+        } catch {
+            if verbose {
+                printFlush("   ⚠️ Review failed: \(error)")
+            }
+            review = ContentReview.irrelevant()
+        }
         let llmDuration = Date().timeIntervalSince(llmStart)
 
         // Extract excerpts from relevantRanges
@@ -794,90 +854,6 @@ public struct SearchOrchestratorStep: Step, Sendable {
         )
     }
 
-    private func reviewContent(
-        markdown: String,
-        title: String,
-        links: [Link],
-        sourceURL: URL,
-        objective: String,
-        knownFacts: [String],
-        relevantDomains: Set<String>,
-        session workerSession: LanguageModelSession
-    ) async -> ContentReview {
-        let maxChars = configuration.researchConfiguration.contentMaxChars
-
-        // Add line numbers to markdown for relevantRanges extraction
-        let lines = markdown.components(separatedBy: "\n")
-        let numberedLines = lines.enumerated().map { index, line in
-            "\(index): \(line)"
-        }
-        let numberedContent = numberedLines.joined(separator: "\n")
-        let truncatedContent = String(numberedContent.prefix(maxChars))
-
-        let linksInfo = links.prefix(5).enumerated().map { index, link in
-            "[\(index + 1)] \(link.text.isEmpty ? "-" : String(link.text.prefix(30))) -> \(link.url)"
-        }.joined(separator: "\n")
-
-        let knownFactsSection = knownFacts.isEmpty ? "" : """
-
-        ## 既に収集した情報（重複を避けること）
-        \(knownFacts.map { "- \($0.prefix(100))" }.joined(separator: "\n"))
-        """
-
-        let prompt = """
-        目的に関連する**新しい**情報を抽出してください。
-
-        ## 目的
-        \(objective)
-        \(knownFactsSection)
-
-        ## ページ: \(title)（行番号付き）
-        \(truncatedContent)
-
-        ## リンク
-        \(linksInfo)
-
-        ## 出力
-        - isRelevant: 新しい関連情報があるか
-        - extractedInfo: 関連情報の要約（100-150字、既知と重複しない）
-        - shouldDeepCrawl: 深掘りすべきか
-        - priorityLinks: 深掘り候補のリンク
-        - relevantRanges: 関連情報が含まれる行範囲（start: 開始行, end: 終了行）
-        """
-
-        if verbose {
-            printFlush("    ┌─── LLM INPUT (ContentReview) ───")
-            printFlush("    objective: \(objective)")
-            printFlush("    title: \(title)")
-            printFlush("    content: \(truncatedContent.prefix(200))...")
-            printFlush("    knownFacts: \(knownFacts.count) items")
-            printFlush("    └─── END LLM INPUT ───")
-        }
-
-        do {
-            let response = try await workerSession.respond(generating: ContentReviewResponse.self) {
-                Prompt(prompt)
-            }
-
-            if verbose {
-                printFlush("    ┌─── LLM OUTPUT (ContentReview) ───")
-                printFlush("    isRelevant: \(response.content.isRelevant)")
-                printFlush("    extractedInfo: \(response.content.extractedInfo)")
-                printFlush("    shouldDeepCrawl: \(response.content.shouldDeepCrawl)")
-                printFlush("    priorityLinks: \(response.content.priorityLinks.count) items")
-                printFlush("    relevantRanges: \(response.content.relevantRanges.map { "\($0.start)..<\($0.end)" })")
-                printFlush("    └─── END LLM OUTPUT ───")
-            }
-
-            return ContentReview(from: response.content)
-        } catch {
-            if verbose {
-                printFlush("   ⚠️ Review failed: \(error)")
-            }
-            return ContentReview.irrelevant()
-        }
-    }
-
     private func extractDeepURLs(
         priorityLinks: [PriorityLink],
         links: [Link],
@@ -910,214 +886,6 @@ public struct SearchOrchestratorStep: Step, Sendable {
         }
 
         return deepURLs
-    }
-
-    // MARK: - Phase 4: Sufficiency Check
-
-    private func checkSufficiency(
-        context: CrawlContext,
-        searchRoundNumber: Int,
-        newRelevantThisRound: Int
-    ) async -> SufficiencyResult {
-        let reviewedContents = context.reviewedContents
-
-        guard !reviewedContents.isEmpty else {
-            return SufficiencyResult.insufficient(reason: "まだ関連情報が収集できていません")
-        }
-
-        let collectedInfo = reviewedContents
-            .filter { $0.isRelevant }
-            .prefix(10)
-            .map { content in
-                "【\(content.url.host ?? "unknown")】\(content.extractedInfo)"
-            }
-            .joined(separator: "\n")
-
-        let criteriaList = context.successCriteria.enumerated()
-            .map { "- \($0.element)" }
-            .joined(separator: "\n")
-
-        let prompt = """
-        あなたは情報充足度を判断するエージェントです。
-        収集した情報の完全性を分析し、情報ギャップを特定してください。
-
-        ## 目的
-        \(context.objective)
-
-        ## 現在の成功基準
-        \(criteriaList)
-
-        ## 検索履歴
-        - 検索ラウンド: \(searchRoundNumber)回目
-        - このラウンドで見つかった新規関連ページ: \(newRelevantThisRound)件
-        - 累計関連ページ: \(context.relevantCount)件
-
-        ## これまでに収集した情報
-        \(collectedInfo)
-
-        ## あなたの任務
-
-        ### 1. Self-reflection: 情報の完全性分析
-        各成功基準について、収集した情報がどの程度その基準を満たしているかを評価してください。
-        - 完全に満たしている
-        - 部分的に満たしている（何が不足か明記）
-        - まだ情報がない
-
-        ### 2. isSufficient（十分か？）
-        全ての成功基準が満たされていればtrue。
-
-        ### 3. shouldGiveUp（諦めるか？）
-        - このラウンドで新規関連ページが0件
-        - 複数ラウンド経過しても情報が増えていない
-
-        ### 4. additionalKeywords（追加キーワード）
-        情報ギャップを埋めるための具体的な検索キーワード（最大2個）。
-        前回の検索結果から得た洞察を活用して、より精密なクエリを構築。
-
-        ### 5. reasonMarkdown（判断理由）
-        各成功基準の達成状況と、残っている情報ギャップを簡潔に記述。
-
-        ### 6. successCriteria（精緻化された成功基準）
-        収集した情報により成功基準を事後更新してください。
-        - 曖昧だった基準は収集した情報を基に具体化
-        - 新たな情報から必要と判明した基準は追加
-        - 変更がなければ現在の基準をそのまま返す        
-        """
-
-        if verbose {
-            printFlush("┌─── LLM INPUT (SufficiencyCheck) ───")
-            printFlush("objective: \(context.objective)")
-            printFlush("successCriteria: \(context.successCriteria)")
-            printFlush("searchRound: \(searchRoundNumber), newRelevantThisRound: \(newRelevantThisRound)")
-            printFlush("collectedInfo: \(reviewedContents.count) items")
-            printFlush("└─── END LLM INPUT ───")
-            printFlush("")
-        }
-
-        sendProgress(.promptSent(phase: "Phase 4: Sufficiency Check", prompt: prompt))
-
-        do {
-            let response = try await session.respond(generating: SufficiencyCheckResponse.self) {
-                Prompt(prompt)
-            }
-
-            if verbose {
-                printFlush("┌─── LLM OUTPUT (SufficiencyCheck) ───")
-                printFlush("isSufficient: \(response.content.isSufficient)")
-                printFlush("shouldGiveUp: \(response.content.shouldGiveUp)")
-                printFlush("additionalKeywords: \(response.content.additionalKeywords)")
-                printFlush("reasonMarkdown: \(response.content.reasonMarkdown.prefix(200))...")
-                printFlush("└─── END LLM OUTPUT ───")
-            }
-
-            return SufficiencyResult(from: response.content)
-        } catch {
-            printFlush("⚠️ Sufficiency check failed: \(error)")
-            return SufficiencyResult.insufficient(reason: "充足度チェック失敗")
-        }
-    }
-
-    // MARK: - Phase 5: Response Building
-
-    private func buildFinalResponse(
-        relevantExcerpts: [CrawlContext.PageExcerpt],
-        reviewedContents: [ReviewedContent],
-        objective: String,
-        questions: [String]
-    ) async -> String {
-        let relevantContents = reviewedContents.filter { $0.isRelevant }
-
-        guard !relevantContents.isEmpty else {
-            return "# \(objective)\n\n関連情報を収集できませんでした。"
-        }
-
-        // Build context from relevant excerpts (actual page content, not just summaries)
-        var contextSection = ""
-        for excerpt in relevantExcerpts {
-            let title = excerpt.title ?? excerpt.url.absoluteString
-            contextSection += "### \(title)\n"
-            contextSection += "URL: \(excerpt.url.absoluteString)\n\n"
-            for excerptText in excerpt.excerpts {
-                contextSection += excerptText + "\n\n"
-            }
-            contextSection += "---\n\n"
-        }
-
-        // Fallback to extractedInfo if no excerpts available
-        if contextSection.isEmpty {
-            contextSection = relevantContents.enumerated().map { index, content in
-                "[\(index + 1)] \(content.url.host ?? "unknown"): \(content.extractedInfo)"
-            }.joined(separator: "\n")
-        }
-
-        let questionsSection = questions.isEmpty ? "" : """
-
-        ## 回答すべき具体的な質問
-        \(questions.map { "- \($0)" }.joined(separator: "\n"))
-        """
-
-        let prompt = """
-        あなたは調査結果を報告する専門家です。
-
-        ## ユーザーの問い
-        \(objective)
-        \(questionsSection)
-
-        ## 収集した情報（関連部分のみ抽出）
-        \(contextSection)
-
-        ## 指示
-        上記の情報を使って、ユーザーの問いに直接回答してください。
-
-        - 具体的なエビデンスを示す
-        - 情報源を明記する
-        - 不明な点や情報が不足している点は正直に述べる
-        - Markdown形式で読みやすく構造化する
-        - ソースURLは後でシステムが追加するため、参照リストは含めない
-        """
-
-        if verbose {
-            printFlush("┌─── LLM INPUT (FinalResponse) ───")
-            printFlush("objective: \(objective)")
-            printFlush("questions: \(questions)")
-            printFlush("relevantExcerpts: \(relevantExcerpts.count) pages")
-            printFlush("contextSection: \(contextSection.count) chars")
-            printFlush("└─── END LLM INPUT ───")
-            printFlush("")
-        }
-
-        sendProgress(.promptSent(phase: "Phase 5: Response Building", prompt: prompt))
-
-        do {
-            let response = try await session.respond(generating: FinalResponseBuildingResponse.self) {
-                Prompt(prompt)
-            }
-
-            if verbose {
-                printFlush("┌─── LLM OUTPUT (FinalResponse) ───")
-                printFlush("responseMarkdown: \(response.content.responseMarkdown.count) chars")
-                printFlush(response.content.responseMarkdown.prefix(500))
-                printFlush("...")
-                printFlush("└─── END LLM OUTPUT ───")
-            }
-
-            var responseMarkdown = response.content.responseMarkdown
-            responseMarkdown += "\n\n## 参照ソース\n"
-            for content in relevantContents {
-                responseMarkdown += "- \(content.url.absoluteString)\n"
-            }
-
-            return responseMarkdown
-        } catch {
-            printFlush("⚠️ Response building failed: \(error)")
-            var fallback = "# \(objective)\n\n"
-            fallback += contextSection
-            fallback += "\n\n## 参照ソース\n"
-            for content in relevantContents {
-                fallback += "- \(content.url.absoluteString)\n"
-            }
-            return fallback
-        }
     }
 
     // MARK: - Domain Filtering

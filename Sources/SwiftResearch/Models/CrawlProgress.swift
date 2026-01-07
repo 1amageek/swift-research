@@ -46,6 +46,7 @@ public enum CrawlProgress: Sendable {
 
 /// Research phase indicator.
 public enum ResearchPhase: String, Sendable, CaseIterable {
+    case initialSearch = "Initial Search"
     case analyzing = "Analyzing Objective"
     case searching = "Searching"
     case reviewing = "Reviewing Content"

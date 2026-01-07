@@ -50,6 +50,7 @@ public final class ResearchViewModel {
 
     public enum ResearchPhase: String, CaseIterable, Sendable {
         case idle = "Idle"
+        case initialSearch = "Initial Search"
         case analyzing = "Analyzing Objective"
         case searching = "Searching"
         case reviewing = "Reviewing Content"
@@ -61,6 +62,7 @@ public final class ResearchViewModel {
         public var icon: String {
             switch self {
             case .idle: return "circle"
+            case .initialSearch: return "magnifyingglass.circle"
             case .analyzing: return "brain"
             case .searching: return "magnifyingglass"
             case .reviewing: return "doc.text.magnifyingglass"
@@ -74,6 +76,7 @@ public final class ResearchViewModel {
         public var color: Color {
             switch self {
             case .idle: return .secondary
+            case .initialSearch: return .indigo
             case .analyzing: return .purple
             case .searching: return .blue
             case .reviewing: return .orange
@@ -213,6 +216,8 @@ public final class ResearchViewModel {
 
         case .phaseChanged(let phase):
             switch phase {
+            case .initialSearch:
+                currentPhase = .initialSearch
             case .analyzing:
                 currentPhase = .analyzing
             case .searching:
