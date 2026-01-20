@@ -26,7 +26,7 @@ let package = Package(
         )
     ],
     dependencies: [
-        .package(url: "https://github.com/1amageek/Selenops.git", from: "0.2.0"),
+        .package(url: "https://github.com/1amageek/Selenops.git", from: "0.3.0"),
         .package(url: "https://github.com/1amageek/SwiftAgent.git", branch: "main"),
         .package(url: "https://github.com/1amageek/Remark.git", branch: "main"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.7.0"),

@@ -266,7 +266,30 @@ public struct SearchOrchestratorStep: Step, Sendable {
         sendProgress(.phaseChanged(phase: .initialSearch))
         let phase0Start = Date()
 
-        let initialSearchResult = await performInitialSearch(query: input.objective)
+        // Disambiguate query using domain context before searching
+        let searchQuery: String
+        if configuration.domainContext != nil {
+            do {
+                searchQuery = try await CrawlerConfigurationContext.withValue(configuration) {
+                    try await QueryDisambiguationStep()
+                        .session(session)
+                        .run(QueryDisambiguationInput(query: input.objective, verbose: verbose))
+                }
+                if searchQuery != input.objective {
+                    printFlush("🔍 Searching: \(searchQuery) (disambiguated from: \(input.objective))")
+                } else {
+                    printFlush("🔍 Searching: \(searchQuery)")
+                }
+            } catch {
+                printFlush("⚠️ Query disambiguation failed: \(error), using original")
+                searchQuery = input.objective
+            }
+        } else {
+            searchQuery = input.objective
+            printFlush("🔍 Searching: \(searchQuery)")
+        }
+
+        let initialSearchResult = await performInitialSearch(query: searchQuery)
 
         let phase0Duration = Date().timeIntervalSince(phase0Start)
         printFlush("⏱️ Phase 0 duration: \(String(format: "%.1f", phase0Duration))s")
@@ -573,9 +596,19 @@ public struct SearchOrchestratorStep: Step, Sendable {
     private func extractBasicInfo(markdown: String, query: String) async -> String? {
         let truncated = String(markdown.prefix(3000))
 
+        let domainSection = configuration.domainContext.map { context in
+            """
+
+            ## Domain Context
+            \(context)
+            Interpret the query from this domain's perspective.
+            """
+        } ?? ""
+
         let prompt = """
-        以下のページから「\(query)」に関する基本情報を抽出してください。
-        100-200字程度で簡潔に要約してください。
+        Extract basic information about "\(query)" from the following page.
+        Provide a concise summary (100-200 characters).
+        \(domainSection)
 
         \(truncated)
         """

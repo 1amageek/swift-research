@@ -147,7 +147,24 @@ let response = try await session.respond(generating: ObjectiveAnalysisResponse.s
 }
 ```
 
-**制限:** Dictionary型・enum型は未サポート
+**Enum対応:** String型enumに`@Generable`を適用可能:
+
+```swift
+@Generable
+public enum Difficulty: String {
+    case easy = "Easy"
+    case medium = "Medium"
+    case hard = "Hard"
+}
+
+@Generable
+public struct TaskResponse: Sendable {
+    @Guide(description: "タスクの難易度")
+    public let difficulty: Difficulty  // Enum型を直接使用
+}
+```
+
+**制限:** Dictionary型は未サポート
 
 ## Security（参考）
 

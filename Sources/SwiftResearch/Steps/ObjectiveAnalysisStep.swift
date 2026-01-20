@@ -48,6 +48,7 @@ public struct ObjectiveAnalysisStep: Step, Sendable {
     public typealias Output = ObjectiveAnalysis
 
     @Session var session: LanguageModelSession
+    @Context var config: CrawlerConfiguration
 
     /// Progress continuation for sending updates.
     private let progressContinuation: AsyncStream<CrawlProgress>.Continuation?
@@ -67,6 +68,15 @@ public struct ObjectiveAnalysisStep: Step, Sendable {
             """
         } ?? ""
 
+        let domainSection = config.domainContext.map { context in
+            """
+
+            ## Domain Context
+            \(context)
+            Interpret the query from this domain's perspective and generate relevant keywords.
+            """
+        } ?? ""
+
         let prompt = """
         あなたは情報収集エージェントです。
 
@@ -76,6 +86,7 @@ public struct ObjectiveAnalysisStep: Step, Sendable {
         ## ユーザーの質問
         \(input.objective)
         \(backgroundSection)
+        \(domainSection)
 
         ## あなたの任務
 

@@ -64,6 +64,7 @@ public struct ResponseBuildingStep: Step, Sendable {
     public typealias Output = String
 
     @Session var session: LanguageModelSession
+    @Context var config: CrawlerConfiguration
 
     /// Progress continuation for sending updates.
     private let progressContinuation: AsyncStream<CrawlProgress>.Continuation?
@@ -78,7 +79,7 @@ public struct ResponseBuildingStep: Step, Sendable {
         let relevantContents = input.reviewedContents.filter { $0.isRelevant }
 
         guard !relevantContents.isEmpty else {
-            return "# \(input.objective)\n\n関連情報を収集できませんでした。"
+            return "# \(input.objective)\n\nNo relevant information could be collected."
         }
 
         // Build context from relevant excerpts (actual page content, not just summaries)
@@ -104,31 +105,41 @@ public struct ResponseBuildingStep: Step, Sendable {
 
         let questionsSection = input.questions.isEmpty ? "" : """
 
-        ## 回答すべき具体的な質問
+        ## Questions to Answer
         \(input.questions.map { "- \($0)" }.joined(separator: "\n"))
         """
 
-        let prompt = """
-        あなたは調査結果を報告する専門家です。
+        let domainSection = config.domainContext.map { context in
+            """
 
-        ## ユーザーの問い
+            ## Domain Context
+            \(context)
+            Generate the response from this domain's perspective.
+            """
+        } ?? ""
+
+        let prompt = """
+        You are an expert at reporting research findings.
+
+        ## User's Question
         \(input.objective)
         \(questionsSection)
+        \(domainSection)
 
-        ## 成功基準
+        ## Success Criteria
         \(criteriaList)
 
-        ## 収集した情報（関連部分のみ抽出）
+        ## Collected Information (relevant excerpts only)
         \(contextSection)
 
-        ## 指示
-        上記の情報を使って、ユーザーの問いに直接回答してください。
+        ## Instructions
+        Use the information above to directly answer the user's question.
 
-        - 具体的なエビデンスを示す
-        - 情報源を明記する
-        - 不明な点や情報が不足している点は正直に述べる
-        - Markdown形式で読みやすく構造化する
-        - ソースURLは後でシステムが追加するため、参照リストは含めない
+        - Provide specific evidence
+        - Cite information sources
+        - Honestly state any unclear points or missing information
+        - Structure the response in readable Markdown format
+        - Do not include a reference list as source URLs will be added by the system
         """
 
         if input.verbose {

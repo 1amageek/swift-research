@@ -70,6 +70,7 @@ public struct SufficiencyCheckStep: Step, Sendable {
     public typealias Output = SufficiencyResult
 
     @Session var session: LanguageModelSession
+    @Context var config: CrawlerConfiguration
 
     /// Progress continuation for sending updates.
     private let progressContinuation: AsyncStream<CrawlProgress>.Continuation?
@@ -97,12 +98,22 @@ public struct SufficiencyCheckStep: Step, Sendable {
             .map { "- \($0)" }
             .joined(separator: "\n")
 
+        let domainSection = config.domainContext.map { context in
+            """
+
+            ## Domain Context
+            \(context)
+            Evaluate sufficiency from this domain's perspective.
+            """
+        } ?? ""
+
         let prompt = """
         あなたは情報充足度を判断するエージェントです。
         収集した情報の完全性を分析し、情報ギャップを特定してください。
 
         ## 目的
         \(input.objective)
+        \(domainSection)
 
         ## 現在の成功基準
         \(criteriaList)

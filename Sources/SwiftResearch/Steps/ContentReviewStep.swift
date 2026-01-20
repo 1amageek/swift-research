@@ -104,12 +104,22 @@ public struct ContentReviewStep: Step, Sendable {
         \(input.knownFacts.map { "- \($0.prefix(100))" }.joined(separator: "\n"))
         """
 
+        let domainSection = config.domainContext.map { context in
+            """
+
+            ## Domain Context
+            \(context)
+            Evaluate relevance from this domain's perspective.
+            """
+        } ?? ""
+
         let prompt = """
         目的に関連する**新しい**情報を抽出してください。
 
         ## 目的
         \(input.objective)
         \(knownFactsSection)
+        \(domainSection)
 
         ## ページ: \(input.title)（行番号付き）
         \(truncatedContent)

@@ -44,6 +44,14 @@ public struct CrawlerConfiguration: Sendable {
     /// The underlying research configuration.
     public let researchConfiguration: ResearchConfiguration
 
+    /// Domain context for query disambiguation.
+    ///
+    /// When set, this context helps the LLM correctly interpret ambiguous queries.
+    /// For example, with domain context "Software development, AI, hardware",
+    /// the query "What is Swift?" will be interpreted as Swift programming language
+    /// rather than SWIFT financial network.
+    public let domainContext: String?
+
     /// Creates a new crawler configuration.
     ///
     /// - Parameters:
@@ -52,18 +60,21 @@ public struct CrawlerConfiguration: Sendable {
     ///   - allowedDomains: Domains to allow. Defaults to `nil` (all allowed).
     ///   - blockedDomains: Domains to block. Defaults to empty.
     ///   - researchConfiguration: The research configuration to use.
+    ///   - domainContext: Domain context for query disambiguation. Defaults to `nil`.
     public init(
         searchEngine: SearchEngine = .duckDuckGo,
         requestDelay: Duration = .milliseconds(500),
         allowedDomains: [String]? = nil,
         blockedDomains: [String] = [],
-        researchConfiguration: ResearchConfiguration = .shared
+        researchConfiguration: ResearchConfiguration = .shared,
+        domainContext: String? = nil
     ) {
         self.searchEngine = searchEngine
         self.requestDelay = requestDelay
         self.allowedDomains = allowedDomains
         self.blockedDomains = blockedDomains
         self.researchConfiguration = researchConfiguration
+        self.domainContext = domainContext
     }
 
     /// The default configuration.
