@@ -71,7 +71,7 @@ extension ResearchCLI {
             print("")
 
             do {
-                let remark = try await Remark.fetch(from: parsedURL)
+                let remark = try await Remark.fetch(from: parsedURL, timeout: 15)
                 let links = try remark.extractLinks()
 
                 print("📝 Title: \(remark.title)")

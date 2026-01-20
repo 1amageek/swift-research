@@ -78,7 +78,7 @@ public struct SearchStep: Step, Sendable {
 
         printFlush("🔍 Searching: \(input.keyword)")
 
-        let remark = try await Remark.fetch(from: searchURL)
+        let remark = try await Remark.fetch(from: searchURL, timeout: 15)
         let links = try remark.extractLinks()
 
         var seenURLs: Set<URL> = []

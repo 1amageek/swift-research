@@ -136,8 +136,8 @@ public struct EvidenceRetrievalStep: Step, Sendable {
         url: URL,
         statement: VerifiableStatement
     ) async throws -> Evidence? {
-        // Fetch page content
-        let remark = try await Remark.fetch(from: url)
+        // Fetch page content with timeout
+        let remark = try await Remark.fetch(from: url, timeout: 10)
         let content = String(remark.markdown.prefix(5000))
 
         // Analyze for evidence

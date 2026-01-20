@@ -567,18 +567,7 @@ public struct SearchOrchestratorStep: Step, Sendable {
         for url in topURLs {
             visitedURLs.append(url)
             do {
-                let remark = try await withThrowingTaskGroup(of: Remark.self) { group in
-                    group.addTask {
-                        try await Remark.fetch(from: url)
-                    }
-                    group.addTask {
-                        try await Task.sleep(for: .seconds(10))
-                        throw CancellationError()
-                    }
-                    let result = try await group.next()!
-                    group.cancelAll()
-                    return result
-                }
+                let remark = try await Remark.fetch(from: url, timeout: 10)
 
                 if let summary = await extractBasicInfo(markdown: remark.markdown, query: query) {
                     summaries.append("【\(url.host ?? url.absoluteString)】\(summary)")
@@ -732,18 +721,7 @@ public struct SearchOrchestratorStep: Step, Sendable {
     /// Attempts to fetch content from a URL with a timeout.
     private func attemptFetch(url: URL) async -> FetchResult {
         do {
-            let remark = try await withThrowingTaskGroup(of: Remark.self) { group in
-                group.addTask {
-                    try await Remark.fetch(from: url)
-                }
-                group.addTask {
-                    try await Task.sleep(for: .seconds(15))
-                    throw CancellationError()
-                }
-                let result = try await group.next()!
-                group.cancelAll()
-                return result
-            }
+            let remark = try await Remark.fetch(from: url, timeout: 15)
             let links = try remark.extractLinks()
             return .success(remark: remark, links: links)
         } catch {
