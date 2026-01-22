@@ -22,6 +22,9 @@ public enum CrawlProgress: Sendable {
     /// URL processing started.
     case urlProcessingStarted(url: URL)
 
+    /// Content was fetched from URL (raw markdown).
+    case contentFetched(url: URL, markdown: String, title: String?)
+
     /// URL processing completed with result.
     case urlProcessed(result: URLProcessResult)
 

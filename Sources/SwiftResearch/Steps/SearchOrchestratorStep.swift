@@ -241,6 +241,18 @@ public struct SearchOrchestratorStep: Step, Sendable {
         return session
     }
 
+    /// Creates a fresh session for a step to avoid context accumulation.
+    ///
+    /// Each phase should use an independent session to prevent previous JSON responses
+    /// from influencing subsequent steps. All necessary information is passed as input
+    /// parameters, so context sharing is not required.
+    private func createStepSession() -> LanguageModelSession {
+        if let factory = sessionFactory {
+            return factory()
+        }
+        return session
+    }
+
     public func run(_ input: SearchQuery) async throws -> AggregatedResult {
         let startTime = Date()
 
@@ -283,10 +295,11 @@ public struct SearchOrchestratorStep: Step, Sendable {
         let searchQuery: String
         if configuration.domainContext != nil {
             do {
-                searchQuery = try await CrawlerConfigurationContext.withValue(configuration) {
-                    try await QueryDisambiguationStep()
-                        .session(session)
-                        .run(QueryDisambiguationInput(query: input.objective, verbose: verbose))
+                searchQuery = try await SessionContext.$current.withValue(createStepSession()) {
+                    try await CrawlerConfigurationContext.withValue(configuration) {
+                        try await QueryDisambiguationStep()
+                            .run(QueryDisambiguationInput(query: input.objective, verbose: verbose))
+                    }
                 }
                 if searchQuery != input.objective {
                     printFlush("🔍 Searching: \(searchQuery) (disambiguated from: \(input.objective))")
@@ -325,9 +338,12 @@ public struct SearchOrchestratorStep: Step, Sendable {
             backgroundInfo: initialSearchResult.summary,
             verbose: verbose
         )
-        let analysis = try await ObjectiveAnalysisStep(progressContinuation: progressContinuation)
-            .session(session)
-            .run(analysisInput)
+        let analysis = try await SessionContext.$current.withValue(createStepSession()) {
+            try await CrawlerConfigurationContext.withValue(configuration) {
+                try await ObjectiveAnalysisStep(progressContinuation: progressContinuation)
+                    .run(analysisInput)
+            }
+        }
 
         let phase1Duration = Date().timeIntervalSince(phase1Start)
         printFlush("⏱️ Phase 1 duration: \(String(format: "%.1f", phase1Duration))s")
@@ -443,9 +459,12 @@ public struct SearchOrchestratorStep: Step, Sendable {
                 newRelevantThisRound: newRelevantThisRound,
                 verbose: verbose
             )
-            let sufficiency = try await SufficiencyCheckStep(progressContinuation: progressContinuation)
-                .session(session)
-                .run(sufficiencyInput)
+            let sufficiency = try await SessionContext.$current.withValue(createStepSession()) {
+                try await CrawlerConfigurationContext.withValue(configuration) {
+                    try await SufficiencyCheckStep(progressContinuation: progressContinuation)
+                        .run(sufficiencyInput)
+                }
+            }
 
             previousRelevantCount = context.relevantCount
 
@@ -513,9 +532,12 @@ public struct SearchOrchestratorStep: Step, Sendable {
             successCriteria: context.successCriteria,
             verbose: verbose
         )
-        let responseMarkdown = try await ResponseBuildingStep(progressContinuation: progressContinuation)
-            .session(session)
-            .run(responseBuildingInput)
+        let responseMarkdown = try await SessionContext.$current.withValue(createStepSession()) {
+            try await CrawlerConfigurationContext.withValue(configuration) {
+                try await ResponseBuildingStep(progressContinuation: progressContinuation)
+                    .run(responseBuildingInput)
+            }
+        }
 
         let phase5Duration = Date().timeIntervalSince(phase5Start)
         printFlush("⏱️ Phase 5 duration: \(String(format: "%.1f", phase5Duration))s")
@@ -616,10 +638,13 @@ public struct SearchOrchestratorStep: Step, Sendable {
         """
 
         do {
-            let response = try await session.respond {
-                Prompt(prompt)
+            let stepSession = createStepSession()
+            return try await SessionContext.$current.withValue(stepSession) {
+                let response = try await stepSession.respond {
+                    Prompt(prompt)
+                }
+                return response.content
             }
-            return response.content
         } catch {
             return nil
         }
@@ -823,6 +848,9 @@ public struct SearchOrchestratorStep: Step, Sendable {
 
         // Store full markdown for use in Phase 5
         context.storePageContent(url: url, markdown: remark.markdown)
+
+        // Send content fetched progress for UI display
+        sendProgress(.contentFetched(url: url, markdown: remark.markdown, title: remark.title))
 
         // Get known facts to improve review accuracy
         let knownFacts = context.getKnownFacts()

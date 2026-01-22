@@ -14,7 +14,10 @@ extension ResearchCLI {
         )
 
         @Option(name: .long, help: "Ollama model name")
-        var model: String = "gpt-oss:20b"
+        var model: String = "lfm2.5-thinking"
+
+        @Option(name: .long, help: "Ollama base URL")
+        var baseURL: String = "http://127.0.0.1:11434"
 
         @Option(name: .long, help: "Number of iterations per test type")
         var iterations: Int = 3
@@ -25,7 +28,21 @@ extension ResearchCLI {
             print("Iterations per test: \(iterations)")
             print("")
 
-            let config = OllamaConfiguration(timeout: 300)
+            // Validate Ollama model before proceeding
+            guard let baseURLParsed = URL(string: baseURL) else {
+                print("❌ Invalid base URL: \(baseURL)")
+                throw ExitCode.failure
+            }
+            do {
+                try await validateOllamaModel(baseURL: baseURLParsed, modelName: model)
+            } catch let error as OllamaError {
+                print("❌ \(error.localizedDescription)")
+                throw ExitCode.failure
+            } catch {
+                print("⚠️ Skipping model validation: \(error.localizedDescription)")
+            }
+
+            let config = OllamaConfiguration(baseURL: baseURLParsed, timeout: 300)
             let ollamaModel = OllamaLanguageModel(configuration: config, modelName: model)
 
             var results: [TestResult] = []
@@ -106,11 +123,7 @@ extension ResearchCLI {
             }
         }
 
-        static let systemInstruction = """
-            You are a JSON output assistant.
-            Always respond with a JSON object.
-            Never output an array directly - wrap arrays in object properties.
-            """
+        static var systemInstruction: String { ResearchCLI.systemInstructions() }
 
         func testDimensionGeneration(model: OllamaLanguageModel, iteration: Int) async -> TestResult {
             print("\n[Iteration \(iteration)]")

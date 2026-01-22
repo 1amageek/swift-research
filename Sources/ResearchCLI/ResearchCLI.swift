@@ -5,6 +5,65 @@ import RemarkKit
 
 #if USE_OTHER_MODELS
 import OpenFoundationModelsOllama
+
+// MARK: - Ollama Error Handling
+
+enum OllamaError: Error, LocalizedError {
+    case connectionFailed
+    case serverError(Int)
+    case modelNotFound(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .connectionFailed:
+            return "Failed to connect to Ollama server. Please ensure Ollama is running."
+        case .serverError(let code):
+            return "Ollama server error (HTTP \(code))"
+        case .modelNotFound(let model):
+            return """
+            Model '\(model)' not found.
+
+            To download the model, run:
+              ollama pull \(model)
+
+            To see available models:
+              ollama list
+            """
+        }
+    }
+}
+
+/// Validates that the specified model exists in Ollama.
+func validateOllamaModel(baseURL: URL, modelName: String) async throws {
+    let tagsURL = baseURL.appendingPathComponent("api/tags")
+
+    let (data, response): (Data, URLResponse)
+    do {
+        (data, response) = try await URLSession.shared.data(from: tagsURL)
+    } catch {
+        throw OllamaError.connectionFailed
+    }
+
+    guard let httpResponse = response as? HTTPURLResponse else {
+        throw OllamaError.connectionFailed
+    }
+
+    if httpResponse.statusCode != 200 {
+        throw OllamaError.serverError(httpResponse.statusCode)
+    }
+
+    struct TagsResponse: Decodable {
+        struct Model: Decodable { let name: String }
+        let models: [Model]
+    }
+
+    let tags = try JSONDecoder().decode(TagsResponse.self, from: data)
+    let modelExists = tags.models.contains { $0.name == modelName || $0.name.hasPrefix(modelName + ":") }
+
+    if !modelExists {
+        throw OllamaError.modelNotFound(modelName)
+    }
+}
 #endif
 
 @main
@@ -16,6 +75,42 @@ struct ResearchCLI: AsyncParsableCommand {
         subcommands: [Research.self, TestSearch.self, TestFetch.self, TestEvaluation.self, TestJSON.self],
         defaultSubcommand: Research.self
     )
+
+    /// Shared system instructions for all research operations
+    /// Includes current date/time for temporal context
+    static func systemInstructions() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        formatter.timeZone = TimeZone.current
+        let currentDateTime = formatter.string(from: Date())
+        let timeZone = TimeZone.current.identifier
+
+        return """
+        あなたは情報収集エージェントです。ユーザーの質問に根拠を持って回答するための情報を収集・分析します。
+
+        # 現在の日時
+        \(currentDateTime) (\(timeZone))
+        IMPORTANT: 「現在」「最新」などの時間表現はこの日時を基準に解釈すること
+
+        # 出力規則
+        - 常に有効なJSONオブジェクトで応答する（'{'で開始）
+        - 配列フィールドはJSON配列として出力（例: "items": ["a", "b"]）
+        - 文字列として配列を出力しない（例: "items": "a, b" は不可）
+        - Markdownコードフェンスは含めない
+        IMPORTANT: メタ的な説明（「JSONで提供しました」「以下が回答です」等）は出力しない
+
+        # 行動規則
+        - 事実に基づいて回答する
+        - 不明な場合は推測せず、その旨を明記する
+        - 質問の背景・理由・含意も考慮する
+
+        # 分析の観点
+        情報を収集・分析する際は以下の観点を考慮:
+        - 事実: 具体的なデータ（数値、日付、名称）
+        - 背景: その事実の理由や原因
+        - 含意: それが意味すること、導かれる結論
+        """
+    }
 }
 
 // MARK: - Test Commands for Individual Steps
@@ -146,6 +241,22 @@ extension ResearchCLI {
                 finalObjective = input
             }
 
+            // Validate Ollama model before proceeding
+            #if USE_OTHER_MODELS
+            guard let baseURLParsed = URL(string: baseURL) else {
+                print("❌ Invalid base URL: \(baseURL)")
+                throw ExitCode.failure
+            }
+            do {
+                try await validateOllamaModel(baseURL: baseURLParsed, modelName: model)
+            } catch let error as OllamaError {
+                print("❌ \(error.localizedDescription)")
+                throw ExitCode.failure
+            } catch {
+                print("⚠️ Skipping model validation: \(error.localizedDescription)")
+            }
+            #endif
+
             // Create language model session
             let session = try createSession()
 
@@ -183,7 +294,7 @@ extension ResearchCLI {
                 session: session,
                 sessionFactory: {
                     let model = SystemLanguageModel()
-                    return LanguageModelSession(model: model, tools: [], instructions: Self.jsonSystemInstructions)
+                    return LanguageModelSession(model: model, tools: [], instructions: ResearchCLI.systemInstructions())
                 },
                 configuration: configuration,
                 verbose: verbose || (log != nil),
@@ -204,16 +315,6 @@ extension ResearchCLI {
             outputAggregatedResult(result, format: format)
         }
 
-        /// System instructions for JSON output to ensure proper array handling
-        private static let jsonSystemInstructions = """
-            You are a helpful assistant that outputs structured JSON.
-            When asked to provide JSON responses:
-            - Always respond with a valid JSON object (starting with '{')
-            - Array fields must be JSON arrays (e.g., "items": ["a", "b"])
-            - Never output arrays as strings (e.g., "items": "a, b" is wrong)
-            - Never include markdown code fences in JSON responses
-            """
-
         private func createSession() throws -> LanguageModelSession {
             #if USE_OTHER_MODELS
             guard let baseURLParsed = URL(string: baseURL) else {
@@ -230,10 +331,10 @@ extension ResearchCLI {
                 configuration: ollamaConfig,
                 modelName: model
             )
-            return LanguageModelSession(model: ollamaModel, tools: [], instructions: Self.jsonSystemInstructions)
+            return LanguageModelSession(model: ollamaModel, tools: [], instructions: ResearchCLI.systemInstructions())
             #else
             let model = SystemLanguageModel()
-            return LanguageModelSession(model: model, tools: [], instructions: Self.jsonSystemInstructions)
+            return LanguageModelSession(model: model, tools: [], instructions: ResearchCLI.systemInstructions())
             #endif
         }
     }
@@ -413,6 +514,23 @@ extension ResearchCLI {
             // Step 2: Run research with domain context
             print("📚 Phase 1: Running Research...")
             print("   Domain context: \(persona.domain.domainDescription)")
+
+            // Validate Ollama model before proceeding
+            #if USE_OTHER_MODELS
+            guard let baseURLParsed = URL(string: baseURL) else {
+                print("❌ Invalid base URL: \(baseURL)")
+                throw ExitCode.failure
+            }
+            do {
+                try await validateOllamaModel(baseURL: baseURLParsed, modelName: model)
+            } catch let error as OllamaError {
+                print("❌ \(error.localizedDescription)")
+                throw ExitCode.failure
+            } catch {
+                print("⚠️ Skipping model validation: \(error.localizedDescription)")
+            }
+            #endif
+
             let session = try createSession()
 
             #if USE_OTHER_MODELS
@@ -438,7 +556,7 @@ extension ResearchCLI {
                 session: session,
                 sessionFactory: {
                     let model = SystemLanguageModel()
-                    return LanguageModelSession(model: model, tools: [], instructions: Self.jsonSystemInstructions)
+                    return LanguageModelSession(model: model, tools: [], instructions: ResearchCLI.systemInstructions())
                 },
                 configuration: crawlerConfig,
                 verbose: false,
@@ -631,16 +749,6 @@ extension ResearchCLI {
             print("   Duration: \(String(format: "%.1f", evalResult.completedAt.timeIntervalSince(evalResult.startedAt)))s")
         }
 
-        /// System instructions for JSON output to ensure proper array handling
-        private static let jsonSystemInstructions = """
-            You are a helpful assistant that outputs structured JSON.
-            When asked to provide JSON responses:
-            - Always respond with a valid JSON object (starting with '{')
-            - Array fields must be JSON arrays (e.g., "items": ["a", "b"])
-            - Never output arrays as strings (e.g., "items": "a, b" is wrong)
-            - Never include markdown code fences in JSON responses
-            """
-
         private func createSession() throws -> LanguageModelSession {
             #if USE_OTHER_MODELS
             guard let baseURLParsed = URL(string: baseURL) else {
@@ -657,10 +765,10 @@ extension ResearchCLI {
                 configuration: ollamaConfig,
                 modelName: model
             )
-            return LanguageModelSession(model: ollamaModel, tools: [], instructions: Self.jsonSystemInstructions)
+            return LanguageModelSession(model: ollamaModel, tools: [], instructions: ResearchCLI.systemInstructions())
             #else
             let model = SystemLanguageModel()
-            return LanguageModelSession(model: model, tools: [], instructions: Self.jsonSystemInstructions)
+            return LanguageModelSession(model: model, tools: [], instructions: ResearchCLI.systemInstructions())
             #endif
         }
     }

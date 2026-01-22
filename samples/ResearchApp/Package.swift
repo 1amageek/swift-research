@@ -2,6 +2,11 @@
 // SwiftUI Research App using SwiftResearch
 
 import PackageDescription
+import Foundation
+
+// By default, uses Apple's FoundationModels framework.
+// Set USE_OTHER_MODELS=1 to use OpenFoundationModels for development/testing.
+let useOtherModels = ProcessInfo.processInfo.environment["USE_OTHER_MODELS"] != nil
 
 let package = Package(
     name: "ResearchApp",
@@ -21,17 +26,21 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../.."),
-    ],
+    ] + (useOtherModels ? [
+        .package(path: "../../../OpenFoundationModels-Ollama"),
+    ] : []),
     targets: [
         // Library target for UI components (enables Preview)
         .target(
             name: "ResearchAppUI",
             dependencies: [
                 .product(name: "SwiftResearch", package: "swift-research"),
-            ],
+            ] + (useOtherModels ? [
+                .product(name: "OpenFoundationModelsOllama", package: "OpenFoundationModels-Ollama"),
+            ] : []),
             swiftSettings: [
                 .enableExperimentalFeature("Observation")
-            ]
+            ] + (useOtherModels ? [.define("USE_OTHER_MODELS")] : [])
         ),
         // Executable target
         .executableTarget(

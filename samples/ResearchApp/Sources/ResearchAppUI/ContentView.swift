@@ -236,7 +236,12 @@ struct DetailView: View {
     var body: some View {
         Group {
             if let result = viewModel.result {
-                ResultView(result: result, sentPrompts: viewModel.sentPrompts)
+                ResultView(
+                    result: result,
+                    sentPrompts: viewModel.sentPrompts,
+                    activityLog: viewModel.activityLog,
+                    explorationItems: viewModel.explorationItems
+                )
             } else if let error = viewModel.error {
                 ErrorView(error: error, onRetry: {
                     Task {

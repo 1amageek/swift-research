@@ -4,6 +4,22 @@ import SwiftResearch
 /// View showing real-time URL exploration progress
 public struct ExplorationView: View {
     let viewModel: ResearchViewModel
+    @State private var selectedTab: ExplorationTab = .activity
+    @State private var selectedActivityItem: ResearchViewModel.ActivityLogItem?
+    @State private var selectedExplorationItem: ResearchViewModel.ExplorationItem?
+    @State private var showInspector: Bool = false
+
+    enum ExplorationTab: String, CaseIterable {
+        case activity = "Activity"
+        case urls = "URLs"
+
+        var icon: String {
+            switch self {
+            case .activity: return "list.bullet.rectangle"
+            case .urls: return "link"
+            }
+        }
+    }
 
     public init(viewModel: ResearchViewModel) {
         self.viewModel = viewModel
@@ -16,24 +32,241 @@ public struct ExplorationView: View {
 
             Divider()
 
-            // Keywords section
-            if !viewModel.keywords.isEmpty {
-                KeywordsSection(
+            // Tab selector
+            Picker("View", selection: $selectedTab) {
+                ForEach(ExplorationTab.allCases, id: \.self) { tab in
+                    Label(tab.rawValue, systemImage: tab.icon)
+                        .tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            // Content based on selected tab
+            switch selectedTab {
+            case .activity:
+                ActivityTimelineView(
+                    activityLog: viewModel.activityLog,
+                    selectedItem: $selectedActivityItem
+                )
+            case .urls:
+                URLExplorationView(
+                    items: viewModel.explorationItems,
                     keywords: viewModel.keywords,
-                    currentKeyword: viewModel.currentKeyword
+                    currentKeyword: viewModel.currentKeyword,
+                    selectedItem: $selectedExplorationItem
+                )
+            }
+        }
+        .inspector(isPresented: $showInspector) {
+            ExplorationInspectorView(
+                activityItem: selectedActivityItem,
+                explorationItem: selectedExplorationItem
+            )
+            .inspectorColumnWidth(min: 300, ideal: 350, max: 450)
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showInspector.toggle()
+                } label: {
+                    Label("Inspector", systemImage: "sidebar.trailing")
+                }
+                .help("Toggle Inspector")
+            }
+        }
+        .onChange(of: selectedActivityItem) { _, newValue in
+            if newValue != nil {
+                selectedExplorationItem = nil
+                showInspector = true
+            }
+        }
+        .onChange(of: selectedExplorationItem) { _, newValue in
+            if newValue != nil {
+                selectedActivityItem = nil
+                showInspector = true
+            }
+        }
+    }
+}
+
+// MARK: - Exploration Inspector View
+
+struct ExplorationInspectorView: View {
+    let activityItem: ResearchViewModel.ActivityLogItem?
+    let explorationItem: ResearchViewModel.ExplorationItem?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if let item = activityItem {
+                    ActivityItemDetail(item: item)
+                } else if let item = explorationItem {
+                    ExplorationItemDetail(item: item)
+                } else {
+                    ContentUnavailableView {
+                        Label("No Selection", systemImage: "sidebar.right")
+                    } description: {
+                        Text("Select an activity or URL to view details")
+                    }
+                }
+            }
+            .padding()
+        }
+        .navigationTitle("Details")
+    }
+}
+
+// MARK: - Activity Timeline View
+
+struct ActivityTimelineView: View {
+    let activityLog: [ResearchViewModel.ActivityLogItem]
+    @Binding var selectedItem: ResearchViewModel.ActivityLogItem?
+
+    private var timeFormatter: DateFormatter {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .medium
+        return formatter
+    }
+
+    var body: some View {
+        if activityLog.isEmpty {
+            ContentUnavailableView {
+                Label("No Activity Yet", systemImage: "clock")
+            } description: {
+                Text("Activity will appear here as research progresses")
+            }
+        } else {
+            ScrollViewReader { proxy in
+                List {
+                    ForEach(activityLog) { item in
+                        ActivityLogRow(
+                            item: item,
+                            isSelected: selectedItem?.id == item.id,
+                            timeFormatter: timeFormatter
+                        )
+                        .id(item.id)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selectedItem = item
+                        }
+                    }
+                }
+                .listStyle(.plain)
+                .onChange(of: activityLog.count) { _, _ in
+                    // Auto-scroll to latest item
+                    if let lastItem = activityLog.last {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo(lastItem.id, anchor: .bottom)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct ActivityLogRow: View {
+    let item: ResearchViewModel.ActivityLogItem
+    let isSelected: Bool
+    let timeFormatter: DateFormatter
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            // Icon
+            ZStack {
+                Circle()
+                    .fill(item.type.color.opacity(0.15))
+                    .frame(width: 28, height: 28)
+
+                Image(systemName: item.type.icon)
+                    .font(.system(size: 12))
+                    .foregroundStyle(item.type.color)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                // Message
+                HStack {
+                    Text(item.message)
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+
+                    Spacer()
+
+                    Text(timeFormatter.string(from: item.timestamp))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .monospacedDigit()
+                }
+
+                // Details
+                if let details = item.details, !details.isEmpty {
+                    Text(details)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                }
+
+                // URL link
+                if let url = item.url {
+                    Button(action: { openURL(url) }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.up.right.square")
+                                .font(.caption2)
+                            Text(url.host ?? url.absoluteString)
+                                .font(.caption2)
+                                .lineLimit(1)
+                        }
+                        .foregroundStyle(.blue)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .listRowBackground(isSelected ? Color.accentColor.opacity(0.1) : Color.clear)
+    }
+
+    private func openURL(_ url: URL) {
+        #if os(macOS)
+        NSWorkspace.shared.open(url)
+        #else
+        UIApplication.shared.open(url)
+        #endif
+    }
+}
+
+// MARK: - URL Exploration View
+
+struct URLExplorationView: View {
+    let items: [ResearchViewModel.ExplorationItem]
+    let keywords: [String]
+    let currentKeyword: String?
+    @Binding var selectedItem: ResearchViewModel.ExplorationItem?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Keywords section
+            if !keywords.isEmpty {
+                KeywordsSection(
+                    keywords: keywords,
+                    currentKeyword: currentKeyword
                 )
                 Divider()
             }
 
-            // URL exploration list
-            if viewModel.explorationItems.isEmpty {
+            // URL list
+            if items.isEmpty {
                 ContentUnavailableView {
                     Label("Waiting for URLs", systemImage: "magnifyingglass")
                 } description: {
                     Text("URLs will appear here as they are discovered")
                 }
             } else {
-                ExplorationList(items: viewModel.explorationItems)
+                ExplorationList(items: items, selectedItem: $selectedItem)
             }
         }
     }
@@ -186,6 +419,7 @@ struct KeywordChip: View {
 
 struct ExplorationList: View {
     let items: [ResearchViewModel.ExplorationItem]
+    @Binding var selectedItem: ResearchViewModel.ExplorationItem?
 
     var body: some View {
         List {
@@ -197,7 +431,11 @@ struct ExplorationList: View {
             if !processingItems.isEmpty {
                 Section("Processing") {
                     ForEach(processingItems) { item in
-                        ExplorationItemRow(item: item)
+                        ExplorationItemRow(item: item, isSelected: selectedItem?.id == item.id)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectedItem = item
+                            }
                     }
                 }
             }
@@ -205,7 +443,11 @@ struct ExplorationList: View {
             if !completedItems.isEmpty {
                 Section("Completed (\(completedItems.count))") {
                     ForEach(completedItems.reversed()) { item in
-                        ExplorationItemRow(item: item)
+                        ExplorationItemRow(item: item, isSelected: selectedItem?.id == item.id)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectedItem = item
+                            }
                     }
                 }
             }
@@ -213,7 +455,11 @@ struct ExplorationList: View {
             if !queuedItems.isEmpty {
                 Section("Queued (\(queuedItems.count))") {
                     ForEach(queuedItems.prefix(10)) { item in
-                        ExplorationItemRow(item: item)
+                        ExplorationItemRow(item: item, isSelected: selectedItem?.id == item.id)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectedItem = item
+                            }
                     }
                     if queuedItems.count > 10 {
                         Text("+ \(queuedItems.count - 10) more in queue")
@@ -229,6 +475,7 @@ struct ExplorationList: View {
 
 struct ExplorationItemRow: View {
     let item: ResearchViewModel.ExplorationItem
+    let isSelected: Bool
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -296,55 +543,7 @@ struct ExplorationItemRow: View {
             Spacer()
         }
         .padding(.vertical, 4)
-    }
-}
-
-// MARK: - Flow Layout (reused from ResultView)
-
-struct ExplorationFlowLayout: Layout {
-    var spacing: CGFloat = 6
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let result = arrangeSubviews(proposal: proposal, subviews: subviews)
-        return result.size
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let result = arrangeSubviews(proposal: proposal, subviews: subviews)
-
-        for (index, subview) in subviews.enumerated() {
-            let point = CGPoint(
-                x: bounds.minX + result.positions[index].x,
-                y: bounds.minY + result.positions[index].y
-            )
-            subview.place(at: point, anchor: .topLeading, proposal: .unspecified)
-        }
-    }
-
-    private func arrangeSubviews(proposal: ProposedViewSize, subviews: Subviews) -> (positions: [CGPoint], size: CGSize) {
-        let maxWidth = proposal.width ?? .infinity
-        var positions: [CGPoint] = []
-        var currentX: CGFloat = 0
-        var currentY: CGFloat = 0
-        var lineHeight: CGFloat = 0
-        var totalWidth: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-
-            if currentX + size.width > maxWidth && currentX > 0 {
-                currentX = 0
-                currentY += lineHeight + spacing
-                lineHeight = 0
-            }
-
-            positions.append(CGPoint(x: currentX, y: currentY))
-            lineHeight = max(lineHeight, size.height)
-            currentX += size.width + spacing
-            totalWidth = max(totalWidth, currentX - spacing)
-        }
-
-        return (positions, CGSize(width: totalWidth, height: currentY + lineHeight))
+        .listRowBackground(isSelected ? Color.accentColor.opacity(0.1) : Color.clear)
     }
 }
 

@@ -119,29 +119,32 @@ public struct ResponseBuildingStep: Step, Sendable {
         } ?? ""
 
         let prompt = """
-        You are an expert at reporting research findings.
-
-        ## User's Question
+        # ユーザーの質問
         \(input.objective)
         \(questionsSection)
         \(domainSection)
 
-        ## Success Criteria
+        # 成功基準
+        以下の情報が含まれていること:
         \(criteriaList)
 
-        ## Collected Information (relevant excerpts only)
+        # 収集した情報
         \(contextSection)
 
-        ## Instructions
-        Use the information above to directly answer the user's question.
+        # 回答の構成
+        以下の構成でMarkdown形式の回答を生成:
+        1. 導入: 質問の要点を簡潔に確認
+        2. 事実: 収集した具体的データや情報
+        3. 分析: 事実の背景や意味の説明
+        4. 結論: 質問への直接的な回答
 
-        - Provide specific evidence
-        - Cite information sources
-        - Honestly state any unclear points or missing information
-        - Structure the response in readable Markdown format
-        - Do not include a reference list as source URLs will be added by the system
+        # 回答のルール
+        - 収集した情報に基づいて回答する
+        - 具体的な数値やデータを含める
+        - 不明な点は正直に記載する
+        - 参照リストは不要（システムが追加）
 
-        IMPORTANT: Respond with a valid JSON object only. Do not include markdown formatting or code fences.
+        IMPORTANT: JSONオブジェクトのみを出力。説明文やMarkdownコードフェンスは不要。
         """
 
         if input.verbose {

@@ -56,7 +56,9 @@ let package = Package(
         ),
         .testTarget(
             name: "SwiftResearchTests",
-            dependencies: ["SwiftResearch"],
+            dependencies: ["SwiftResearch"] + (useOtherModels ? [
+                .product(name: "OpenFoundationModelsOllama", package: "OpenFoundationModels-Ollama"),
+            ] : []),
             swiftSettings: useOtherModels ? [.define("USE_OTHER_MODELS")] : []
         ),
     ]

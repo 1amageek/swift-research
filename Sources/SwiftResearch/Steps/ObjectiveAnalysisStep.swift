@@ -78,35 +78,33 @@ public struct ObjectiveAnalysisStep: Step, Sendable {
         } ?? ""
 
         let prompt = """
-        あなたは情報収集エージェントです。
-
-        ## 目的
-        ユーザーの質問に根拠を持って答えること
-
-        ## ユーザーの質問
+        # ユーザーの質問
         \(input.objective)
         \(backgroundSection)
         \(domainSection)
 
-        ## あなたの任務
+        # あなたの任務
+        以下の3つを生成してください。
 
-        ### 1. 検索キーワード（keywords）
-        目的を達成するための検索キーワードを生成。
+        ## 1. 検索キーワード（keywords）
+        Web検索で使用するキーワードを生成。
         - 英語で記述
-        - 検索エンジン向け
+        - 検索エンジン向けに最適化
+        - 3〜5個
 
-        ### 2. 具体的な問い（questions）
-        目的を達成するために答えるべき具体的な問いを3つ生成。
-        - 明確化: 何を意味しているか？
-        - 前提検証: 何を前提としているか？
-        - 含意探索: 何が導かれるか？
+        ## 2. 具体的な問い（questions）
+        質問に回答するために答えるべき問いを3つ生成。
+        - 明確化: 質問の用語や範囲は何を意味しているか？
+        - 前提検証: 質問が前提としていることは何か？
+        - 含意探索: 回答から何が導かれるか？
 
-        ### 3. 成功基準（successCriteria）
-        情報収集が十分と判断するための具体的な条件を詳細にリスト化。
-        - 目的を達成するために必要な情報項目を全て列挙
-        - 具体的な属性名を明記する
+        ## 3. 成功基準（successCriteria）
+        情報収集の完了条件を以下の観点で列挙。
+        - 事実: 収集すべき具体的データ（数値、日付、名称など）
+        - 背景: その事実の理由や原因
+        - 含意: 上記の問い（questions）に回答するために必要な情報
 
-        IMPORTANT: Respond with a valid JSON object only. Do not include markdown formatting or code fences.
+        IMPORTANT: JSONオブジェクトのみを出力。説明文やMarkdownは不要。
         """
 
         if input.verbose {
