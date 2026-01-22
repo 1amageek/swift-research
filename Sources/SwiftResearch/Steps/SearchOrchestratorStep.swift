@@ -602,7 +602,7 @@ public struct SearchOrchestratorStep: Step, Sendable {
         for url in topURLs {
             visitedURLs.append(url)
             do {
-                let remark = try await Remark.fetch(from: url, timeout: 10)
+                let remark = try await Remark.fetch(from: url)
 
                 if let summary = await extractBasicInfo(markdown: remark.markdown, query: query) {
                     summaries.append("【\(url.host ?? url.absoluteString)】\(summary)")
@@ -764,7 +764,7 @@ public struct SearchOrchestratorStep: Step, Sendable {
     /// Attempts to fetch content from a URL with a timeout.
     private func attemptFetch(url: URL) async -> FetchResult {
         do {
-            let remark = try await Remark.fetch(from: url, timeout: 15)
+            let remark = try await Remark.fetch(from: url)
             let links = try remark.extractLinks()
             return .success(remark: remark, links: links)
         } catch {
