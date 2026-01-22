@@ -153,6 +153,8 @@ public struct SufficiencyCheckStep: Step, Sendable {
         - 曖昧だった基準は収集した情報を基に具体化
         - 新たな情報から必要と判明した基準は追加
         - 変更がなければ現在の基準をそのまま返す
+
+        IMPORTANT: Respond with a valid JSON object only. Do not include markdown formatting or code fences.
         """
 
         if input.verbose {

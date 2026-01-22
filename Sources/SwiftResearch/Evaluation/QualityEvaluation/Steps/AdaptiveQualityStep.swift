@@ -199,6 +199,8 @@ public struct AdaptiveQualityStep: Step, Sendable {
         3. Priority improvements (2-3 actionable suggestions ranked by impact)
 
         Focus on patterns across dimensions rather than repeating individual dimension feedback.
+
+        IMPORTANT: Respond with a valid JSON object only. Do not include markdown formatting or code fences.
         """
 
         let response = try await session.respond(generating: OverallQualityResponse.self) {

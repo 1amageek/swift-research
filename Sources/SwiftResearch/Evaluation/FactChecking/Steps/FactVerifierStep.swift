@@ -127,6 +127,8 @@ public struct FactVerifierStep: Step, Sendable {
         - 0.7-0.9: At least one high-credibility source supports
         - 0.5-0.7: Evidence is mixed or from moderate-credibility sources
         - <0.5: Evidence is weak or conflicting
+
+        IMPORTANT: Respond with a valid JSON object only. Do not include markdown formatting or code fences.
         """
     }
 }

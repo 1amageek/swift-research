@@ -106,6 +106,7 @@ public struct ObjectiveAnalysisStep: Step, Sendable {
         - 目的を達成するために必要な情報項目を全て列挙
         - 具体的な属性名を明記する
 
+        IMPORTANT: Respond with a valid JSON object only. Do not include markdown formatting or code fences.
         """
 
         if input.verbose {

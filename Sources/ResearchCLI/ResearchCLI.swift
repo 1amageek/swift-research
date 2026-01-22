@@ -13,7 +13,7 @@ struct ResearchCLI: AsyncParsableCommand {
         commandName: "research-cli",
         abstract: "LLM-powered objective-driven research assistant",
         version: "1.0.0",
-        subcommands: [Research.self, TestSearch.self, TestFetch.self, TestEvaluation.self],
+        subcommands: [Research.self, TestSearch.self, TestFetch.self, TestEvaluation.self, TestJSON.self],
         defaultSubcommand: Research.self
     )
 }
@@ -183,7 +183,7 @@ extension ResearchCLI {
                 session: session,
                 sessionFactory: {
                     let model = SystemLanguageModel()
-                    return LanguageModelSession(model: model, tools: [], instructions: nil as String?)
+                    return LanguageModelSession(model: model, tools: [], instructions: Self.jsonSystemInstructions)
                 },
                 configuration: configuration,
                 verbose: verbose || (log != nil),
@@ -204,6 +204,16 @@ extension ResearchCLI {
             outputAggregatedResult(result, format: format)
         }
 
+        /// System instructions for JSON output to ensure proper array handling
+        private static let jsonSystemInstructions = """
+            You are a helpful assistant that outputs structured JSON.
+            When asked to provide JSON responses:
+            - Always respond with a valid JSON object (starting with '{')
+            - Array fields must be JSON arrays (e.g., "items": ["a", "b"])
+            - Never output arrays as strings (e.g., "items": "a, b" is wrong)
+            - Never include markdown code fences in JSON responses
+            """
+
         private func createSession() throws -> LanguageModelSession {
             #if USE_OTHER_MODELS
             guard let baseURLParsed = URL(string: baseURL) else {
@@ -220,10 +230,10 @@ extension ResearchCLI {
                 configuration: ollamaConfig,
                 modelName: model
             )
-            return LanguageModelSession(model: ollamaModel, tools: [], instructions: nil as String?)
+            return LanguageModelSession(model: ollamaModel, tools: [], instructions: Self.jsonSystemInstructions)
             #else
             let model = SystemLanguageModel()
-            return LanguageModelSession(model: model, tools: [], instructions: nil as String?)
+            return LanguageModelSession(model: model, tools: [], instructions: Self.jsonSystemInstructions)
             #endif
         }
     }
@@ -428,7 +438,7 @@ extension ResearchCLI {
                 session: session,
                 sessionFactory: {
                     let model = SystemLanguageModel()
-                    return LanguageModelSession(model: model, tools: [], instructions: nil as String?)
+                    return LanguageModelSession(model: model, tools: [], instructions: Self.jsonSystemInstructions)
                 },
                 configuration: crawlerConfig,
                 verbose: false,
@@ -620,6 +630,16 @@ extension ResearchCLI {
             print("   Duration: \(String(format: "%.1f", evalResult.completedAt.timeIntervalSince(evalResult.startedAt)))s")
         }
 
+        /// System instructions for JSON output to ensure proper array handling
+        private static let jsonSystemInstructions = """
+            You are a helpful assistant that outputs structured JSON.
+            When asked to provide JSON responses:
+            - Always respond with a valid JSON object (starting with '{')
+            - Array fields must be JSON arrays (e.g., "items": ["a", "b"])
+            - Never output arrays as strings (e.g., "items": "a, b" is wrong)
+            - Never include markdown code fences in JSON responses
+            """
+
         private func createSession() throws -> LanguageModelSession {
             #if USE_OTHER_MODELS
             guard let baseURLParsed = URL(string: baseURL) else {
@@ -636,10 +656,10 @@ extension ResearchCLI {
                 configuration: ollamaConfig,
                 modelName: model
             )
-            return LanguageModelSession(model: ollamaModel, tools: [], instructions: nil as String?)
+            return LanguageModelSession(model: ollamaModel, tools: [], instructions: Self.jsonSystemInstructions)
             #else
             let model = SystemLanguageModel()
-            return LanguageModelSession(model: model, tools: [], instructions: nil as String?)
+            return LanguageModelSession(model: model, tools: [], instructions: Self.jsonSystemInstructions)
             #endif
         }
     }

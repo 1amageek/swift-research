@@ -55,21 +55,26 @@ public struct DimensionScorerStep: Step, Sendable {
         print("[DimensionScorer] Calling LLM for scoring...")
 
         do {
-            let response = try await session.respond(generating: DimensionScoreResponse.self) {
-                Prompt(prompt)
-            }
+            // 非ストリーミングモードで構造化出力を生成
+            let generateStep = Generate<String, DimensionScoreResponse>(
+                session: session,
+                prompt: { Prompt($0) }
+            )
+
+            let response = try await generateStep.run(prompt)
             print("[DimensionScorer] LLM response received for '\(input.dimension.name)'")
 
             return DimensionScore(
                 dimension: input.dimension,
-                score: response.content.score,
-                reasoning: response.content.reasoning,
-                evidence: response.content.evidence,
-                suggestions: response.content.suggestions
+                score: response.score,
+                reasoning: response.reasoning,
+                evidence: response.evidence,
+                suggestions: response.suggestions
             )
         } catch {
             // Fallback: Return a default score if structured output fails
             print("[DimensionScorer] Warning: Failed to score \(input.dimension.name): \(error)")
+            print("[DimensionScorer] Error details: \(String(describing: error))")
             return DimensionScore(
                 dimension: input.dimension,
                 score: 5,  // Default to middle score
@@ -110,6 +115,8 @@ public struct DimensionScorerStep: Step, Sendable {
         2. Detailed reasoning for the score
         3. Specific evidence (quotes or references) from the output
         4. Suggestions for improvement
+
+        IMPORTANT: Respond with a valid JSON object only. Do not include markdown formatting or code fences.
         """
     }
 }

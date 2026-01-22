@@ -123,6 +123,8 @@ public struct EvidenceRetrievalStep: Step, Sendable {
 
         Generate 2-3 search queries that would help find evidence to verify or refute this statement.
         Focus on finding authoritative sources.
+
+        IMPORTANT: Respond with a valid JSON object only. Do not include markdown formatting or code fences.
         """
 
         let response = try await session.respond(generating: VerificationSearchQueryResponse.self) {
@@ -159,6 +161,8 @@ public struct EvidenceRetrievalStep: Step, Sendable {
         3. What is the credibility of this source?
 
         If no relevant evidence is found, indicate "neutral" support level.
+
+        IMPORTANT: Respond with a valid JSON object only. Do not include markdown formatting or code fences.
         """
 
         let response = try await session.respond(generating: EvidenceAnalysisResponse.self) {

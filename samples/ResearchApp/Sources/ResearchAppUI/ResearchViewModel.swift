@@ -176,7 +176,7 @@ public final class ResearchViewModel {
                 session: session,
                 sessionFactory: {
                     let model = SystemLanguageModel()
-                    return LanguageModelSession(model: model, tools: [], instructions: nil as String?)
+                    return LanguageModelSession(model: model, tools: [], instructions: Self.jsonSystemInstructions)
                 },
                 configuration: configuration,
                 verbose: false,
@@ -311,8 +311,18 @@ public final class ResearchViewModel {
 
     // MARK: - Private
 
+    /// System instructions for JSON output to ensure proper array handling
+    private static let jsonSystemInstructions = """
+        You are a helpful assistant that outputs structured JSON.
+        When asked to provide JSON responses:
+        - Always respond with a valid JSON object (starting with '{')
+        - Array fields must be JSON arrays (e.g., "items": ["a", "b"])
+        - Never output arrays as strings (e.g., "items": "a, b" is wrong)
+        - Never include markdown code fences in JSON responses
+        """
+
     private func createSession() -> LanguageModelSession {
         let model = SystemLanguageModel()
-        return LanguageModelSession(model: model, tools: [], instructions: nil as String?)
+        return LanguageModelSession(model: model, tools: [], instructions: Self.jsonSystemInstructions)
     }
 }

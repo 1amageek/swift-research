@@ -108,6 +108,8 @@ public struct DimensionGeneratorStep: Step, Sendable {
         - "Temporal Coverage" for time-sensitive topics
 
         Do NOT repeat the general dimensions. Focus on what makes this task unique.
+
+        IMPORTANT: Respond with a valid JSON object only. Do not include markdown formatting or code fences.
         """
     }
 }

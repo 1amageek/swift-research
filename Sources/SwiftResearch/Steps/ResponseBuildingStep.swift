@@ -140,6 +140,8 @@ public struct ResponseBuildingStep: Step, Sendable {
         - Honestly state any unclear points or missing information
         - Structure the response in readable Markdown format
         - Do not include a reference list as source URLs will be added by the system
+
+        IMPORTANT: Respond with a valid JSON object only. Do not include markdown formatting or code fences.
         """
 
         if input.verbose {

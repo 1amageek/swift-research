@@ -133,6 +133,8 @@ public struct ContentReviewStep: Step, Sendable {
         - shouldDeepCrawl: 深掘りすべきか
         - priorityLinks: 深掘り候補のリンク
         - relevantRanges: 関連情報が含まれる行範囲（start: 開始行, end: 終了行）
+
+        IMPORTANT: Respond with a valid JSON object only. Do not include markdown formatting or code fences.
         """
 
         if input.verbose {

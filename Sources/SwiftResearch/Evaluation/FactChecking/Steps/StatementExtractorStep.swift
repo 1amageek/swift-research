@@ -107,6 +107,8 @@ public struct StatementExtractorStep: Step, Sendable {
 
         Extract up to \(input.maxStatements) most important verifiable statements.
         Prioritize statements that are central to the research findings.
+
+        IMPORTANT: Respond with a valid JSON object only. Do not include markdown formatting or code fences.
         """
     }
 }
