@@ -47,11 +47,13 @@ public struct TaskGeneratorStep: Step, Sendable {
     public func run(_ input: TaskGenerationInput) async throws -> [EvaluationTask] {
         let prompt = buildPrompt(for: input)
 
-        let response = try await session.respond(generating: TaskGenerationResponse.self) {
-            Prompt(prompt)
-        }
+        let generateStep = Generate<String, TaskGenerationResponse>(
+            session: session,
+            prompt: { Prompt($0) }
+        )
+        let response = try await generateStep.run(prompt)
 
-        return response.content.tasks.map { generated in
+        return response.tasks.map { generated in
             EvaluationTask(
                 persona: input.persona,
                 objective: generated.objective,

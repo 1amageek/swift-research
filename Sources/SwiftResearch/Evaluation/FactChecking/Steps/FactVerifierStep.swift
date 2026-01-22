@@ -67,24 +67,26 @@ public struct FactVerifierStep: Step, Sendable {
 
         let prompt = buildPrompt(for: input)
 
-        let response = try await session.respond(generating: FactVerificationResponse.self) {
-            Prompt(prompt)
-        }
+        let generateStep = Generate<String, FactVerificationResponse>(
+            session: session,
+            prompt: { Prompt($0) }
+        )
+        let response = try await generateStep.run(prompt)
 
         // Only include correction if verdict indicates an error
-        let correction: String? = switch response.content.verdict {
+        let correction: String? = switch response.verdict {
         case .incorrect, .partiallyCorrect:
-            response.content.correction.isEmpty ? nil : response.content.correction
-        case .correct, .unknown:
+            response.correction.isEmpty ? nil : response.correction
+        case .correct, .unknown, .errorOccurred:
             nil
         }
 
         return FactVerificationResult(
             statement: input.statement,
-            verdict: response.content.verdict,
+            verdict: response.verdict,
             evidence: input.evidence,
-            confidence: response.content.confidence,
-            explanation: response.content.explanation,
+            confidence: response.confidence,
+            explanation: response.explanation,
             correction: correction
         )
     }

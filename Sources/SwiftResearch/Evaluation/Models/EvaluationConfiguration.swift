@@ -71,7 +71,7 @@ public struct EvaluationConfiguration: Sendable {
         maxStatementsToVerify: Int = 20,
         evidencePerStatement: Int = 3,
         verificationConfidenceThreshold: Double = 0.7,
-        runEvaluationsInParallel: Bool = true,
+        runEvaluationsInParallel: Bool = false,
         autoTuningEnabled: Bool = true,
         minImprovementThreshold: Double = 0.01,
         maxDegradationThreshold: Double = 0.05,

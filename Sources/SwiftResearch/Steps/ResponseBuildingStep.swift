@@ -157,19 +157,21 @@ public struct ResponseBuildingStep: Step, Sendable {
         progressContinuation?.yield(.promptSent(phase: "Phase 5: Response Building", prompt: prompt))
 
         do {
-            let response = try await session.respond(generating: FinalResponseBuildingResponse.self) {
-                Prompt(prompt)
-            }
+            let generateStep = Generate<String, FinalResponseBuildingResponse>(
+                session: session,
+                prompt: { Prompt($0) }
+            )
+            let response = try await generateStep.run(prompt)
 
             if input.verbose {
                 printFlush("┌─── LLM OUTPUT (FinalResponse) ───")
-                printFlush("responseMarkdown: \(response.content.responseMarkdown.count) chars")
-                printFlush(response.content.responseMarkdown.prefix(500))
+                printFlush("responseMarkdown: \(response.responseMarkdown.count) chars")
+                printFlush(response.responseMarkdown.prefix(500))
                 printFlush("...")
                 printFlush("└─── END LLM OUTPUT ───")
             }
 
-            var responseMarkdown = response.content.responseMarkdown
+            var responseMarkdown = response.responseMarkdown
             responseMarkdown += "\n\n## 参照ソース\n"
             for content in relevantContents {
                 responseMarkdown += "- \(content.url.absoluteString)\n"

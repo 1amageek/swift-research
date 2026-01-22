@@ -21,7 +21,12 @@ internal func printFlush(_ items: Any..., separator: String = " ", terminator: S
     if let handle = globalLogFileHandle {
         let logLine = output + terminator
         if let data = logLine.data(using: .utf8) {
-            try? handle.write(contentsOf: data)
+            do {
+                try handle.write(contentsOf: data)
+            } catch {
+                // Log file write failed - print to stderr to avoid recursion
+                fputs("Warning: Failed to write to log file: \(error)\n", stderr)
+            }
         }
     }
 }
@@ -242,11 +247,19 @@ public struct SearchOrchestratorStep: Step, Sendable {
         // Set up log file handle
         if let logURL = logFileURL {
             FileManager.default.createFile(atPath: logURL.path, contents: nil)
-            globalLogFileHandle = try? FileHandle(forWritingTo: logURL)
-            printFlush("📝 Logging to: \(logURL.path)")
+            do {
+                globalLogFileHandle = try FileHandle(forWritingTo: logURL)
+                printFlush("📝 Logging to: \(logURL.path)")
+            } catch {
+                printFlush("⚠️ Failed to open log file: \(error)")
+            }
         }
         defer {
-            try? globalLogFileHandle?.close()
+            do {
+                try globalLogFileHandle?.close()
+            } catch {
+                printFlush("⚠️ Failed to close log file: \(error)")
+            }
             globalLogFileHandle = nil
         }
 
@@ -699,7 +712,12 @@ public struct SearchOrchestratorStep: Step, Sendable {
             }
 
             // Request delay
-            try? await Task.sleep(for: configuration.requestDelay)
+            do {
+                try await Task.sleep(for: configuration.requestDelay)
+            } catch {
+                // Task was cancelled, exit worker loop
+                break
+            }
         }
     }
 
@@ -745,7 +763,12 @@ public struct SearchOrchestratorStep: Step, Sendable {
                 // Exponential backoff: 1s, 2s, 4s
                 let delay = Double(1 << (attempt - 1))
                 printFlush("   ↻ Retry \(attempt)/\(maxRetries) after \(String(format: "%.0f", delay))s delay")
-                try? await Task.sleep(for: .seconds(delay))
+                do {
+                    try await Task.sleep(for: .seconds(delay))
+                } catch {
+                    // Task was cancelled, abort retry
+                    return nil
+                }
             }
 
             let result = await attemptFetch(url: url)

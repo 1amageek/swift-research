@@ -145,10 +145,12 @@ public struct TaskFilterStep: Step, Sendable {
         Evaluate and provide your assessment.
         """
 
-        let response = try await session.respond(generating: TaskQualificationResponse.self) {
-            Prompt(prompt)
-        }
-        return response.content
+        let generateStep = Generate<String, TaskQualificationResponse>(
+            session: session,
+            prompt: { Prompt($0) }
+        )
+        let response = try await generateStep.run(prompt)
+        return response
     }
 
     // MARK: - Stage 2: Search Necessity
@@ -176,10 +178,12 @@ public struct TaskFilterStep: Step, Sendable {
         Evaluate and provide your assessment.
         """
 
-        let response = try await session.respond(generating: SearchNecessityResponse.self) {
-            Prompt(prompt)
-        }
-        return response.content
+        let generateStep = Generate<String, SearchNecessityResponse>(
+            session: session,
+            prompt: { Prompt($0) }
+        )
+        let response = try await generateStep.run(prompt)
+        return response
     }
 }
 

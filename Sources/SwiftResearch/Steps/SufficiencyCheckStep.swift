@@ -170,20 +170,22 @@ public struct SufficiencyCheckStep: Step, Sendable {
         progressContinuation?.yield(.promptSent(phase: "Phase 4: Sufficiency Check", prompt: prompt))
 
         do {
-            let response = try await session.respond(generating: SufficiencyCheckResponse.self) {
-                Prompt(prompt)
-            }
+            let generateStep = Generate<String, SufficiencyCheckResponse>(
+                session: session,
+                prompt: { Prompt($0) }
+            )
+            let response = try await generateStep.run(prompt)
 
             if input.verbose {
                 printFlush("┌─── LLM OUTPUT (SufficiencyCheck) ───")
-                printFlush("isSufficient: \(response.content.isSufficient)")
-                printFlush("shouldGiveUp: \(response.content.shouldGiveUp)")
-                printFlush("additionalKeywords: \(response.content.additionalKeywords)")
-                printFlush("reasonMarkdown: \(response.content.reasonMarkdown.prefix(200))...")
+                printFlush("isSufficient: \(response.isSufficient)")
+                printFlush("shouldGiveUp: \(response.shouldGiveUp)")
+                printFlush("additionalKeywords: \(response.additionalKeywords)")
+                printFlush("reasonMarkdown: \(response.reasonMarkdown.prefix(200))...")
                 printFlush("└─── END LLM OUTPUT ───")
             }
 
-            return SufficiencyResult(from: response.content)
+            return SufficiencyResult(from: response)
         } catch {
             printFlush("⚠️ Sufficiency check failed: \(error)")
             return SufficiencyResult.insufficient(reason: "充足度チェック失敗")

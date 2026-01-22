@@ -113,7 +113,7 @@ extension ResearchCLI {
 
         #if USE_OTHER_MODELS
         @Option(name: .long, help: "Ollama model name")
-        var model: String = "gpt-oss:20b"
+        var model: String = "lfm2.5-thinking"
 
         @Option(name: .long, help: "Ollama base URL")
         var baseURL: String = "http://127.0.0.1:11434"
@@ -383,7 +383,7 @@ extension ResearchCLI {
 
         #if USE_OTHER_MODELS
         @Option(name: .long, help: "Ollama model name")
-        var model: String = "gpt-oss:20b"
+        var model: String = "lfm2.5-thinking"
 
         @Option(name: .long, help: "Ollama base URL")
         var baseURL: String = "http://127.0.0.1:11434"
@@ -617,6 +617,7 @@ extension ResearchCLI {
                 case .incorrect: "✗"
                 case .partiallyCorrect: "⚠"
                 case .unknown: "?"
+                case .errorOccurred: "⚡"
                 }
                 print("   \(emoji) [\(verification.verdict.rawValue)] \(String(verification.statement.text.prefix(50)))...")
                 if let correction = verification.correction {

@@ -182,11 +182,13 @@ public struct AutoTunerStep: Step, Sendable {
         Only suggest adjustments for parameters that exist.
         """
 
-        let response = try await session.respond(generating: ParameterAdjustmentResponse.self) {
-            Prompt(prompt)
-        }
+        let generateStep = Generate<String, ParameterAdjustmentResponse>(
+            session: session,
+            prompt: { Prompt($0) }
+        )
+        let response = try await generateStep.run(prompt)
 
-        return response.content.adjustments
+        return response.adjustments
     }
 
     // MARK: - Apply Adjustments

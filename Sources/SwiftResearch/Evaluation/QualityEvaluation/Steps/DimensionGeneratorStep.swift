@@ -50,13 +50,15 @@ public struct DimensionGeneratorStep: Step, Sendable {
         print("[DimensionGenerator] Calling LLM for structured output...")
 
         do {
-            let response = try await session.respond(generating: DimensionGenerationResponse.self) {
-                Prompt(prompt)
-            }
+            let generateStep = Generate<String, DimensionGenerationResponse>(
+                session: session,
+                prompt: { Prompt($0) }
+            )
+            let response = try await generateStep.run(prompt)
             print("[DimensionGenerator] LLM response received, parsing dimensions...")
 
             // Convert generated dimensions to QualityDimension objects
-            let taskSpecificDimensions = response.content.dimensions.prefix(input.maxDimensions).map { generated in
+            let taskSpecificDimensions = response.dimensions.prefix(input.maxDimensions).map { generated in
                 QualityDimension(
                     name: generated.name,
                     dimensionDescription: generated.description,

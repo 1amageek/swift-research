@@ -203,11 +203,13 @@ public struct AdaptiveQualityStep: Step, Sendable {
         IMPORTANT: Respond with a valid JSON object only. Do not include markdown formatting or code fences.
         """
 
-        let response = try await session.respond(generating: OverallQualityResponse.self) {
-            Prompt(prompt)
-        }
+        let generateStep = Generate<String, OverallQualityResponse>(
+            session: session,
+            prompt: { Prompt($0) }
+        )
+        let response = try await generateStep.run(prompt)
 
-        return response.content
+        return response
     }
 
     /// Generates a fallback assessment when LLM structured output fails.

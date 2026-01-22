@@ -79,7 +79,7 @@ swift build
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--limit` | Maximum URLs to visit | 50 |
-| `--model` | Ollama model name | gpt-oss:20b |
+| `--model` | Ollama model name | lfm2.5-thinking |
 | `--format` | Output format (text/json) | text |
 | `--verbose` | Show detailed LLM I/O | false |
 | `--log` | Log file path | none |
@@ -90,7 +90,7 @@ swift build
 import SwiftResearch
 
 let configuration = CrawlerConfiguration(
-    modelName: "gpt-oss:20b"
+    modelName: "lfm2.5-thinking"
 )
 
 let orchestrator = SearchOrchestratorStep(
@@ -157,6 +157,61 @@ DeepCrawl and sufficiency checks consider past results:
 
 - **DeepCrawl**: Stop when consecutive irrelevant pages are encountered
 - **Sufficiency Check**: Give up when no new relevant pages are found
+
+## Evaluation Framework
+
+SwiftResearch includes a comprehensive evaluation framework for assessing research quality:
+
+### Components
+
+- **Quality Evaluation**: Scores research output across multiple dimensions (Coverage, Insight, Clarity, Technical Accuracy, etc.)
+- **Fact Checking**: Extracts verifiable statements and validates them against web sources
+- **Task Construction**: Generates evaluation tasks based on personas and domains
+
+### Running Evaluations
+
+```bash
+# Run evaluation framework test
+swift run research-cli test-evaluation
+
+# With custom model
+swift run research-cli test-evaluation --model lfm2.5-thinking
+```
+
+### Benchmark Results
+
+| Metric | Score |
+|--------|-------|
+| Overall Score | 80.2/100 |
+| Quality Score | 67.0/100 |
+| Factual Accuracy | 100% |
+
+### Evaluation Architecture
+
+```
+EvaluationTask
+    ↓
+┌─────────────────────────────────┐
+│  Research Execution             │
+│  (SearchOrchestratorStep)       │
+└─────────────────────────────────┘
+    ↓
+┌─────────────────────────────────┐
+│  Quality Evaluation             │
+│  - Dimension Generation         │
+│  - Dimension Scoring            │
+│  - Overall Assessment           │
+└─────────────────────────────────┘
+    ↓
+┌─────────────────────────────────┐
+│  Fact Checking                  │
+│  - Statement Extraction         │
+│  - Evidence Retrieval           │
+│  - Verification                 │
+└─────────────────────────────────┘
+    ↓
+EvaluationResult
+```
 
 ## Dependencies
 

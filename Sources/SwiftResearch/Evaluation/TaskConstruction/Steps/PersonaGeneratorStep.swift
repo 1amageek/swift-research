@@ -47,11 +47,13 @@ public struct PersonaGeneratorStep: Step, Sendable {
     public func run(_ input: PersonaGenerationInput) async throws -> [Persona] {
         let prompt = buildPrompt(for: input)
 
-        let response = try await session.respond(generating: PersonaGenerationResponse.self) {
-            Prompt(prompt)
-        }
+        let generateStep = Generate<String, PersonaGenerationResponse>(
+            session: session,
+            prompt: { Prompt($0) }
+        )
+        let response = try await generateStep.run(prompt)
 
-        return response.content.personas.map { generated in
+        return response.personas.map { generated in
             Persona(
                 domain: input.domain,
                 role: generated.role,

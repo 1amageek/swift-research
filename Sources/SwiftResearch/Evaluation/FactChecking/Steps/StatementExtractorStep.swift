@@ -54,12 +54,14 @@ public struct StatementExtractorStep: Step, Sendable {
         print("[StatementExtractor] Calling LLM for statement extraction...")
 
         do {
-            let response = try await session.respond(generating: StatementExtractionResponse.self) {
-                Prompt(prompt)
-            }
+            let generateStep = Generate<String, StatementExtractionResponse>(
+                session: session,
+                prompt: { Prompt($0) }
+            )
+            let response = try await generateStep.run(prompt)
             print("[StatementExtractor] LLM response received, parsing statements...")
 
-            let statements = response.content.statements.prefix(input.maxStatements).map { extracted in
+            let statements = response.statements.prefix(input.maxStatements).map { extracted in
                 VerifiableStatement(
                     text: extracted.text,
                     type: extracted.type,

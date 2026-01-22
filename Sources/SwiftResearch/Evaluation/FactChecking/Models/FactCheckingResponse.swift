@@ -8,26 +8,26 @@ import SwiftAgent
 /// The LLM extracts verifiable factual statements from the research output.
 @Generable
 public struct StatementExtractionResponse: Sendable {
-    @Guide(description: "抽出された検証可能な文のリスト")
+    @Guide(description: "List of extracted verifiable statements")
     public let statements: [ExtractedStatement]
 }
 
 /// Individual statement extracted by LLM.
 @Generable
 public struct ExtractedStatement: Sendable {
-    @Guide(description: "検証可能な文（原文から抽出）")
+    @Guide(description: "Verifiable statement (extracted from source)")
     public let text: String
 
-    @Guide(description: "文のタイプ")
+    @Guide(description: "Type of statement")
     public let type: StatementType
 
-    @Guide(description: "文が含まれるセクション名")
+    @Guide(description: "Section name where the statement appears")
     public let sourceSection: String
 
-    @Guide(description: "検証可能性の信頼度（0.0〜1.0）", .range(0.0...1.0))
+    @Guide(description: "Confidence in verifiability (0.0-1.0)", .range(0.0...1.0))
     public let verifiabilityConfidence: Double
 
-    @Guide(description: "検証に使用すべき検索クエリ")
+    @Guide(description: "Suggested search query for verification")
     public let suggestedSearchQuery: String
 }
 
@@ -38,16 +38,16 @@ public struct ExtractedStatement: Sendable {
 /// The LLM analyzes how well a piece of evidence supports or contradicts a statement.
 @Generable
 public struct EvidenceAnalysisResponse: Sendable {
-    @Guide(description: "証拠が文をどの程度支持するか")
+    @Guide(description: "How well the evidence supports the statement")
     public let supportLevel: SupportLevel
 
-    @Guide(description: "証拠から抽出した関連テキスト")
+    @Guide(description: "Relevant text extracted from the evidence")
     public let relevantText: String
 
-    @Guide(description: "支持/矛盾の分析理由")
+    @Guide(description: "Reasoning for support/contradiction")
     public let reasoning: String
 
-    @Guide(description: "情報源の信頼性（0.0〜1.0）", .range(0.0...1.0))
+    @Guide(description: "Credibility of the source (0.0-1.0)", .range(0.0...1.0))
     public let sourceCredibility: Double
 }
 
@@ -58,16 +58,16 @@ public struct EvidenceAnalysisResponse: Sendable {
 /// The LLM makes a final verdict on a statement based on collected evidence.
 @Generable
 public struct FactVerificationResponse: Sendable {
-    @Guide(description: "検証結果")
+    @Guide(description: "Verification verdict")
     public let verdict: FactVerdict
 
-    @Guide(description: "判定の信頼度（0.0〜1.0）", .range(0.0...1.0))
+    @Guide(description: "Confidence in the verdict (0.0-1.0)", .range(0.0...1.0))
     public let confidence: Double
 
-    @Guide(description: "判定理由（証拠に基づく説明）")
+    @Guide(description: "Explanation of the verdict (evidence-based)")
     public let explanation: String
 
-    @Guide(description: "正しい情報（incorrectまたはpartiallyCorrectの場合）")
+    @Guide(description: "Correct information (if incorrect or partiallyCorrect)")
     public let correction: String
 }
 
@@ -76,9 +76,6 @@ public struct FactVerificationResponse: Sendable {
 /// Response from search query generation for fact verification.
 @Generable
 public struct VerificationSearchQueryResponse: Sendable {
-    @Guide(description: "検証用検索クエリ（最大3つ）")
+    @Guide(description: "Search queries for verification (up to 3)")
     public let queries: [String]
-
-    @Guide(description: "各クエリが検証しようとしている観点")
-    public let perspectives: [String]
 }

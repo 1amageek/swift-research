@@ -121,10 +121,10 @@ public struct FactCheckOrchestratorStep: Step, Sendable {
 
                 results.append(result)
             } catch {
-                // Return unknown result on error
+                // Return error result when verification fails
                 results.append(FactVerificationResult(
                     statement: statement,
-                    verdict: .unknown,
+                    verdict: .errorOccurred,
                     evidence: [],
                     confidence: 0.0,
                     explanation: "Verification failed: \(error.localizedDescription)",

@@ -147,21 +147,23 @@ public struct ContentReviewStep: Step, Sendable {
         }
 
         do {
-            let response = try await session.respond(generating: ContentReviewResponse.self) {
-                Prompt(prompt)
-            }
+            let generateStep = Generate<String, ContentReviewResponse>(
+                session: session,
+                prompt: { Prompt($0) }
+            )
+            let response = try await generateStep.run(prompt)
 
             if input.verbose {
                 printFlush("    ┌─── LLM OUTPUT (ContentReview) ───")
-                printFlush("    isRelevant: \(response.content.isRelevant)")
-                printFlush("    extractedInfo: \(response.content.extractedInfo)")
-                printFlush("    shouldDeepCrawl: \(response.content.shouldDeepCrawl)")
-                printFlush("    priorityLinks: \(response.content.priorityLinks.count) items")
-                printFlush("    relevantRanges: \(response.content.relevantRanges.map { "\($0.start)..<\($0.end)" })")
+                printFlush("    isRelevant: \(response.isRelevant)")
+                printFlush("    extractedInfo: \(response.extractedInfo)")
+                printFlush("    shouldDeepCrawl: \(response.shouldDeepCrawl)")
+                printFlush("    priorityLinks: \(response.priorityLinks.count) items")
+                printFlush("    relevantRanges: \(response.relevantRanges.map { "\($0.start)..<\($0.end)" })")
                 printFlush("    └─── END LLM OUTPUT ───")
             }
 
-            return ContentReview(from: response.content)
+            return ContentReview(from: response)
         } catch {
             if input.verbose {
                 printFlush("   ⚠️ Review failed: \(error)")

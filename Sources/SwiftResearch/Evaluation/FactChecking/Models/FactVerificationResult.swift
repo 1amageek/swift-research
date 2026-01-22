@@ -16,6 +16,9 @@ public enum FactVerdict: String, Sendable, Codable, CaseIterable {
     /// The statement is partially correct.
     case partiallyCorrect = "Partially Correct"
 
+    /// An error occurred during verification.
+    case errorOccurred = "Error Occurred"
+
     /// Whether this verdict counts as "correct" for accuracy calculation.
     public var isCorrect: Bool {
         self == .correct
@@ -24,6 +27,11 @@ public enum FactVerdict: String, Sendable, Codable, CaseIterable {
     /// Whether this verdict counts as "incorrect" for accuracy calculation.
     public var isIncorrect: Bool {
         self == .incorrect
+    }
+
+    /// Whether this verdict represents an error state.
+    public var isError: Bool {
+        self == .errorOccurred
     }
 }
 
@@ -115,6 +123,9 @@ public struct FactCheckResult: Sendable, Codable {
     /// Number of partially correct statements.
     public let partiallyCorrectCount: Int
 
+    /// Number of statements that failed verification due to errors.
+    public let errorCount: Int
+
     /// Factual accuracy percentage (correct / (correct + incorrect)).
     public let accuracy: Double
 
@@ -132,6 +143,7 @@ public struct FactCheckResult: Sendable, Codable {
         self.incorrectCount = verifications.filter { $0.verdict == .incorrect }.count
         self.unknownCount = verifications.filter { $0.verdict == .unknown }.count
         self.partiallyCorrectCount = verifications.filter { $0.verdict == .partiallyCorrect }.count
+        self.errorCount = verifications.filter { $0.verdict == .errorOccurred }.count
 
         // Accuracy: correct / (correct + incorrect), ignoring unknown
         let verifiableCount = correctCount + incorrectCount
@@ -173,6 +185,11 @@ public struct FactCheckResult: Sendable, Codable {
 
 extension FactCheckResult: CustomStringConvertible {
     public var description: String {
-        "Accuracy: \(String(format: "%.1f", accuracy))% (\(correctCount)/\(correctCount + incorrectCount) verified, \(unknownCount) unknown)"
+        var result = "Accuracy: \(String(format: "%.1f", accuracy))% (\(correctCount)/\(correctCount + incorrectCount) verified, \(unknownCount) unknown"
+        if errorCount > 0 {
+            result += ", \(errorCount) errors"
+        }
+        result += ")"
+        return result
     }
 }

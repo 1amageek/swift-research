@@ -119,20 +119,22 @@ public struct ObjectiveAnalysisStep: Step, Sendable {
         progressContinuation?.yield(.promptSent(phase: "Phase 1: Objective Analysis", prompt: prompt))
 
         do {
-            let response = try await session.respond(generating: ObjectiveAnalysisResponse.self) {
-                Prompt(prompt)
-            }
+            let generateStep = Generate<String, ObjectiveAnalysisResponse>(
+                session: session,
+                prompt: { Prompt($0) }
+            )
+            let response = try await generateStep.run(prompt)
 
             if input.verbose {
                 printFlush("┌─── LLM OUTPUT (ObjectiveAnalysis) ───")
-                printFlush("keywords: \(response.content.keywords)")
-                printFlush("questions: \(response.content.questions)")
-                printFlush("successCriteria: \(response.content.successCriteria)")
+                printFlush("keywords: \(response.keywords)")
+                printFlush("questions: \(response.questions)")
+                printFlush("successCriteria: \(response.successCriteria)")
                 printFlush("└─── END LLM OUTPUT ───")
                 printFlush("")
             }
 
-            let rawAnalysis = response.content
+            let rawAnalysis = response
 
             if rawAnalysis.keywords.isEmpty {
                 printFlush("⚠️ LLM returned empty keywords, using fallback")

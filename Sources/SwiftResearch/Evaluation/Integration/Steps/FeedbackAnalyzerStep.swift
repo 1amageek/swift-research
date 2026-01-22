@@ -129,11 +129,13 @@ public struct FeedbackAnalyzerStep: Step, Sendable {
         Use the corrections to understand what kinds of facts the system is getting wrong.
         """
 
-        let response = try await session.respond(generating: WeaknessDiagnosisResponse.self) {
-            Prompt(prompt)
-        }
+        let generateStep = Generate<String, WeaknessDiagnosisResponse>(
+            session: session,
+            prompt: { Prompt($0) }
+        )
+        let response = try await generateStep.run(prompt)
 
-        return response.content.weaknesses
+        return response.weaknesses
     }
 
     private func generateSuggestions(
@@ -208,10 +210,12 @@ public struct FeedbackAnalyzerStep: Step, Sendable {
         5. Priority (high/medium/low)
         """
 
-        let response = try await session.respond(generating: FeedbackAnalysisResponse.self) {
-            Prompt(prompt)
-        }
-        return response.content
+        let generateStep = Generate<String, FeedbackAnalysisResponse>(
+            session: session,
+            prompt: { Prompt($0) }
+        )
+        let response = try await generateStep.run(prompt)
+        return response
     }
 
     private func extractPriorityActions(from suggestions: FeedbackAnalysisResponse) -> [ImprovementSuggestion] {

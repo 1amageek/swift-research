@@ -127,11 +127,13 @@ public struct EvidenceRetrievalStep: Step, Sendable {
         IMPORTANT: Respond with a valid JSON object only. Do not include markdown formatting or code fences.
         """
 
-        let response = try await session.respond(generating: VerificationSearchQueryResponse.self) {
-            Prompt(prompt)
-        }
+        let generateStep = Generate<String, VerificationSearchQueryResponse>(
+            session: session,
+            prompt: { Prompt($0) }
+        )
+        let response = try await generateStep.run(prompt)
 
-        return response.content.queries
+        return response.queries
     }
 
     private func analyzePageForEvidence(
@@ -165,11 +167,13 @@ public struct EvidenceRetrievalStep: Step, Sendable {
         IMPORTANT: Respond with a valid JSON object only. Do not include markdown formatting or code fences.
         """
 
-        let response = try await session.respond(generating: EvidenceAnalysisResponse.self) {
-            Prompt(prompt)
-        }
+        let generateStep = Generate<String, EvidenceAnalysisResponse>(
+            session: session,
+            prompt: { Prompt($0) }
+        )
+        let response = try await generateStep.run(prompt)
 
-        let analysisResult = response.content
+        let analysisResult = response
 
         // Skip if neutral and not useful
         guard analysisResult.supportLevel != SupportLevel.neutral || !analysisResult.relevantText.isEmpty else {
