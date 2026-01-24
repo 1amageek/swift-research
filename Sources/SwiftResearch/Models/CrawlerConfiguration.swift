@@ -1,28 +1,6 @@
 import Foundation
 import SwiftAgent
 
-/// Input for the crawler containing URLs and research objective.
-public struct CrawlerInput: Sendable {
-    /// The URLs to crawl.
-    public let urls: [URL]
-
-    /// The research objective.
-    public let objective: String
-
-    /// Creates a new crawler input.
-    ///
-    /// - Parameters:
-    ///   - urls: The URLs to crawl.
-    ///   - objective: The research objective.
-    public init(
-        urls: [URL],
-        objective: String
-    ) {
-        self.urls = urls
-        self.objective = objective
-    }
-}
-
 /// Configuration for the crawler.
 ///
 /// Contains crawler-specific settings like search engine and domain filtering.

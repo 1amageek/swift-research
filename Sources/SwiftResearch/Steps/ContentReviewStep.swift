@@ -54,36 +54,37 @@ public struct ContentReviewInput: Sendable {
 /// Reviews page content to extract relevant information for the research objective.
 /// Uses LLM to analyze content, determine relevance, and identify priority links for deep crawling.
 ///
-/// Uses `@Session` for implicit session propagation and `@Context` for configuration.
-///
 /// ## Example
 ///
 /// ```swift
-/// try await withSession(workerSession) {
-///     try await withContext(CrawlerConfigContext.self, value: config) {
-///         let input = ContentReviewInput(
-///             markdown: remark.markdown,
-///             title: remark.title,
-///             links: links,
-///             sourceURL: url,
-///             objective: "...",
-///             knownFacts: [],
-///             relevantDomains: []
-///         )
-///         let review = try await ContentReviewStep().run(input)
-///     }
-/// }
+/// // Run within context that provides ModelContext and config
+/// let input = ContentReviewInput(
+///     markdown: remark.markdown,
+///     title: remark.title,
+///     links: links,
+///     sourceURL: url,
+///     objective: "...",
+///     knownFacts: [],
+///     relevantDomains: []
+/// )
+/// let review = try await ContentReviewStep().run(input)
 /// ```
 public struct ContentReviewStep: Step, Sendable {
     public typealias Input = ContentReviewInput
     public typealias Output = ContentReview
 
-    @Session var session: LanguageModelSession
+    @Context var modelContext: ModelContext
     @Context var config: CrawlerConfiguration
 
     public init() {}
 
     public func run(_ input: ContentReviewInput) async throws -> ContentReview {
+        let session = LanguageModelSession(
+            model: modelContext.model,
+            tools: [],
+            instructions: StepInstructions.contentReview
+        )
+
         let maxChars = config.researchConfiguration.contentMaxChars
 
         // Add line numbers to markdown for relevantRanges extraction

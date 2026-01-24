@@ -1,6 +1,20 @@
 import Foundation
 import SwiftAgent
 
+// MARK: - Phase 0.5: Query Understanding
+
+/// Response from query understanding.
+///
+/// Extracts the subject from the user's query and explains why.
+@Generable
+public struct QueryUnderstandingResponse: Sendable {
+    @Guide(description: "The main subject/topic the user wants to know about")
+    public let subject: String
+
+    @Guide(description: "Reasoning explaining why this subject was extracted from the query")
+    public let reasoning: String
+}
+
 // MARK: - Phase 1: Objective Analysis
 
 /// Response from objective analysis.

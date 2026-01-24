@@ -76,8 +76,6 @@ public struct SearchStep: Step, Sendable {
             throw CrawlerError.invalidURL(input.keyword)
         }
 
-        printFlush("🔍 Searching: \(input.keyword)")
-
         let remark = try await Remark.fetch(from: searchURL, timeout: 15)
         let links = try remark.extractLinks()
 

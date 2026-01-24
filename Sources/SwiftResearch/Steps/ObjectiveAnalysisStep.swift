@@ -30,25 +30,20 @@ public struct ObjectiveAnalysisInput: Sendable {
 /// - Socratic questions for deeper understanding
 /// - Success criteria for determining sufficiency
 ///
-/// Uses `@Session` for implicit session propagation.
-///
 /// ## Example
 ///
 /// ```swift
-/// try await withSession(session) {
-///     let input = ObjectiveAnalysisInput(
-///         objective: "What is Swift concurrency?",
-///         backgroundInfo: nil
-///     )
-///     let analysis = try await ObjectiveAnalysisStep().run(input)
-/// }
+/// // Run within context that provides ModelContext, config, and queryContext
+/// let input = ObjectiveAnalysisInput(objective: "What is Swift concurrency?")
+/// let analysis = try await ObjectiveAnalysisStep().run(input)
 /// ```
 public struct ObjectiveAnalysisStep: Step, Sendable {
     public typealias Input = ObjectiveAnalysisInput
     public typealias Output = ObjectiveAnalysis
 
-    @Session var session: LanguageModelSession
+    @Context var modelContext: ModelContext
     @Context var config: CrawlerConfiguration
+    @Context var queryContext: QueryContext
 
     /// Progress continuation for sending updates.
     private let progressContinuation: AsyncStream<CrawlProgress>.Continuation?
@@ -60,6 +55,12 @@ public struct ObjectiveAnalysisStep: Step, Sendable {
     }
 
     public func run(_ input: ObjectiveAnalysisInput) async throws -> ObjectiveAnalysis {
+        let session = LanguageModelSession(
+            model: modelContext.model,
+            tools: [],
+            instructions: StepInstructions.objectiveAnalysis
+        )
+
         let backgroundSection = input.backgroundInfo.map { info in
             """
 
@@ -80,26 +81,30 @@ public struct ObjectiveAnalysisStep: Step, Sendable {
         let prompt = """
         # ユーザーの質問
         \(input.objective)
+
+        # クエリ理解
+        主題: \(queryContext.subject)
+        理由: \(queryContext.reasoning)
         \(backgroundSection)
         \(domainSection)
 
         # あなたの任務
-        以下の3つを生成してください。
+        「\(queryContext.subject)」について以下の3つを生成してください。
 
         ## 1. 検索キーワード（keywords）
-        Web検索で使用するキーワードを生成。
-        - 英語で記述
+        「\(queryContext.subject)」に関する情報を見つけるためのWeb検索キーワードを生成。
+        - 英語で記述（固有名詞は元の言語も可）
         - 検索エンジン向けに最適化
-        - 3〜5個
+        - キーワードを複数生成すること
 
         ## 2. 具体的な問い（questions）
-        質問に回答するために答えるべき問いを3つ生成。
-        - 明確化: 質問の用語や範囲は何を意味しているか？
-        - 前提検証: 質問が前提としていることは何か？
+        「\(queryContext.subject)」について答えるべき問いを生成。
+        - 明確化: 用語や範囲は何を意味しているか？
+        - 前提検証: 何を前提としているか？
         - 含意探索: 回答から何が導かれるか？
 
         ## 3. 成功基準（successCriteria）
-        情報収集の完了条件を以下の観点で列挙。
+        「\(queryContext.subject)」の情報収集完了条件を以下の観点で列挙。
         - 事実: 収集すべき具体的データ（数値、日付、名称など）
         - 背景: その事実の理由や原因
         - 含意: 上記の問い（questions）に回答するために必要な情報
@@ -136,7 +141,7 @@ public struct ObjectiveAnalysisStep: Step, Sendable {
 
             if rawAnalysis.keywords.isEmpty {
                 printFlush("⚠️ LLM returned empty keywords, using fallback")
-                return ObjectiveAnalysis.fallback(objective: input.objective)
+                return ObjectiveAnalysis.fallback(objective: queryContext.subject)
             }
 
             let uniqueKeywords = Array(Set(rawAnalysis.keywords)).prefix(5)
@@ -150,7 +155,7 @@ public struct ObjectiveAnalysisStep: Step, Sendable {
             )
         } catch {
             printFlush("⚠️ Objective analysis failed: \(error)")
-            return ObjectiveAnalysis.fallback(objective: input.objective)
+            return ObjectiveAnalysis.fallback(objective: queryContext.subject)
         }
     }
 }

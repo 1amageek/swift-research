@@ -48,28 +48,25 @@ public struct SufficiencyCheckInput: Sendable {
 /// Evaluates whether sufficient information has been collected to answer the research objective.
 /// Uses Self-reflection to analyze information completeness and identify gaps.
 ///
-/// Uses `@Session` for implicit session propagation.
-///
 /// ## Example
 ///
 /// ```swift
-/// try await withSession(session) {
-///     let input = SufficiencyCheckInput(
-///         objective: "...",
-///         successCriteria: ["..."],
-///         reviewedContents: contents,
-///         relevantCount: 5,
-///         searchRoundNumber: 1,
-///         newRelevantThisRound: 3
-///     )
-///     let result = try await SufficiencyCheckStep().run(input)
-/// }
+/// // Run within context that provides ModelContext and config
+/// let input = SufficiencyCheckInput(
+///     objective: "...",
+///     successCriteria: ["..."],
+///     reviewedContents: contents,
+///     relevantCount: 5,
+///     searchRoundNumber: 1,
+///     newRelevantThisRound: 3
+/// )
+/// let result = try await SufficiencyCheckStep().run(input)
 /// ```
 public struct SufficiencyCheckStep: Step, Sendable {
     public typealias Input = SufficiencyCheckInput
     public typealias Output = SufficiencyResult
 
-    @Session var session: LanguageModelSession
+    @Context var modelContext: ModelContext
     @Context var config: CrawlerConfiguration
 
     /// Progress continuation for sending updates.
@@ -82,6 +79,12 @@ public struct SufficiencyCheckStep: Step, Sendable {
     }
 
     public func run(_ input: SufficiencyCheckInput) async throws -> SufficiencyResult {
+        let session = LanguageModelSession(
+            model: modelContext.model,
+            tools: [],
+            instructions: StepInstructions.sufficiencyCheck
+        )
+
         guard !input.reviewedContents.isEmpty else {
             return SufficiencyResult.insufficient(reason: "まだ関連情報が収集できていません")
         }
@@ -108,8 +111,6 @@ public struct SufficiencyCheckStep: Step, Sendable {
         } ?? ""
 
         let prompt = """
-        あなたは情報充足度を判断するエージェントです。
-        収集した情報の完全性を分析し、情報ギャップを特定してください。
 
         ## 目的
         \(input.objective)

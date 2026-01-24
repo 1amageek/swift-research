@@ -21,24 +21,19 @@ public struct QueryDisambiguationInput: Sendable {
 /// Swift programming language or SWIFT financial network), this step uses the domain
 /// context to generate an unambiguous search query.
 ///
-/// Uses `@Session` for LLM access and `@Context` for domain context.
-///
 /// ## Example
 ///
 /// ```swift
-/// let config = CrawlerConfiguration(domainContext: "Software development, AI")
+/// // Run within context that provides ModelContext and config
 /// let input = QueryDisambiguationInput(query: "What is Swift?")
-/// let disambiguated = try await QueryDisambiguationStep()
-///     .session(session)
-///     .context(config)
-///     .run(input)
+/// let disambiguated = try await QueryDisambiguationStep().run(input)
 /// // Returns: "Swift programming language Apple iOS development"
 /// ```
 public struct QueryDisambiguationStep: Step, Sendable {
     public typealias Input = QueryDisambiguationInput
     public typealias Output = String
 
-    @Session var session: LanguageModelSession
+    @Context var modelContext: ModelContext
     @Context var config: CrawlerConfiguration
 
     public init() {}
@@ -52,6 +47,12 @@ public struct QueryDisambiguationStep: Step, Sendable {
             return input.query
         }
 
+        let session = LanguageModelSession(
+            model: modelContext.model,
+            tools: [],
+            instructions: StepInstructions.queryDisambiguation
+        )
+
         let prompt = """
         Rewrite the following search query to be unambiguous within the given domain context.
 
@@ -64,11 +65,6 @@ public struct QueryDisambiguationStep: Step, Sendable {
         - Keep the query concise and suitable for web search
         - Return ONLY the rewritten search query, nothing else
         - If the query is already unambiguous within the domain, return it as-is
-
-        Examples:
-        - Query: "What is Swift?" + Domain: "Software development" → "Swift programming language Apple"
-        - Query: "Python tutorial" + Domain: "Data science" → "Python programming tutorial data science"
-        - Query: "AWS Lambda" + Domain: "Cloud computing" → "AWS Lambda serverless functions"
         """
 
         if input.verbose {

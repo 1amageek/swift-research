@@ -43,27 +43,24 @@ public struct ResponseBuildingInput: Sendable {
 /// Builds the final markdown response from collected information.
 /// Synthesizes excerpts and reviews into a coherent answer to the research objective.
 ///
-/// Uses `@Session` for implicit session propagation.
-///
 /// ## Example
 ///
 /// ```swift
-/// try await withSession(session) {
-///     let input = ResponseBuildingInput(
-///         relevantExcerpts: excerpts,
-///         reviewedContents: contents,
-///         objective: "...",
-///         questions: ["..."],
-///         successCriteria: ["..."]
-///     )
-///     let markdown = try await ResponseBuildingStep().run(input)
-/// }
+/// // Run within context that provides ModelContext and config
+/// let input = ResponseBuildingInput(
+///     relevantExcerpts: excerpts,
+///     reviewedContents: contents,
+///     objective: "...",
+///     questions: ["..."],
+///     successCriteria: ["..."]
+/// )
+/// let markdown = try await ResponseBuildingStep().run(input)
 /// ```
 public struct ResponseBuildingStep: Step, Sendable {
     public typealias Input = ResponseBuildingInput
     public typealias Output = String
 
-    @Session var session: LanguageModelSession
+    @Context var modelContext: ModelContext
     @Context var config: CrawlerConfiguration
 
     /// Progress continuation for sending updates.
@@ -76,6 +73,12 @@ public struct ResponseBuildingStep: Step, Sendable {
     }
 
     public func run(_ input: ResponseBuildingInput) async throws -> String {
+        let session = LanguageModelSession(
+            model: modelContext.model,
+            tools: [],
+            instructions: StepInstructions.responseBuilding
+        )
+
         let relevantContents = input.reviewedContents.filter { $0.isRelevant }
 
         guard !relevantContents.isEmpty else {

@@ -129,21 +129,14 @@ func classifyFetchError(_ error: Error) -> FetchErrorType {
 /// ## Example
 ///
 /// ```swift
-/// let session = LanguageModelSession(model: model, tools: [], instructions: nil as String?)
-/// let orchestrator = SearchOrchestratorStep(session: session)
+/// let orchestrator = SearchOrchestratorStep(model: model)
 /// let result = try await orchestrator.run(SearchQuery(objective: "..."))
 /// ```
-/// Factory closure for creating LanguageModelSession instances.
-///
-/// Used when LLM does not support concurrent requests.
-public typealias SessionFactory = @Sendable () -> LanguageModelSession
-
 public struct SearchOrchestratorStep: Step, Sendable {
     public typealias Input = SearchQuery
     public typealias Output = AggregatedResult
 
-    private let session: LanguageModelSession
-    private let sessionFactory: SessionFactory?
+    private let model: any LanguageModel
     private let configuration: CrawlerConfiguration
     private let verbose: Bool
     private let logFileURL: URL?
@@ -152,18 +145,17 @@ public struct SearchOrchestratorStep: Step, Sendable {
     /// Creates a new search orchestrator step.
     ///
     /// - Parameters:
-    ///   - session: The language model session to use for LLM operations.
+    ///   - model: The language model to use for LLM operations.
     ///   - configuration: The crawler configuration.
     ///   - verbose: Whether to output verbose logging.
     ///   - logFileURL: Optional file URL to write logs to.
     public init(
-        session: LanguageModelSession,
+        model: some LanguageModel,
         configuration: CrawlerConfiguration = .default,
         verbose: Bool = false,
         logFileURL: URL? = nil
     ) {
-        self.session = session
-        self.sessionFactory = nil
+        self.model = model
         self.configuration = configuration
         self.verbose = verbose
         self.logFileURL = logFileURL
@@ -173,48 +165,19 @@ public struct SearchOrchestratorStep: Step, Sendable {
     /// Creates a new search orchestrator step with progress reporting.
     ///
     /// - Parameters:
-    ///   - session: The language model session to use for LLM operations.
+    ///   - model: The language model to use for LLM operations.
     ///   - configuration: The crawler configuration.
     ///   - verbose: Whether to output verbose logging.
     ///   - logFileURL: Optional file URL to write logs to.
     ///   - progressContinuation: Continuation to send progress updates.
     public init(
-        session: LanguageModelSession,
+        model: some LanguageModel,
         configuration: CrawlerConfiguration = .default,
         verbose: Bool = false,
         logFileURL: URL? = nil,
         progressContinuation: AsyncStream<CrawlProgress>.Continuation?
     ) {
-        self.session = session
-        self.sessionFactory = nil
-        self.configuration = configuration
-        self.verbose = verbose
-        self.logFileURL = logFileURL
-        self.progressContinuation = progressContinuation
-    }
-
-    /// Creates a new search orchestrator step with a session factory.
-    ///
-    /// Use this initializer when the LLM does not support concurrent requests.
-    /// Each worker will create its own session using the factory.
-    ///
-    /// - Parameters:
-    ///   - session: The language model session for non-parallel operations (Phase 1, 4, 5).
-    ///   - sessionFactory: Factory to create worker-specific sessions for Phase 3.
-    ///   - configuration: The crawler configuration.
-    ///   - verbose: Whether to output verbose logging.
-    ///   - logFileURL: Optional file URL to write logs to.
-    ///   - progressContinuation: Continuation to send progress updates.
-    public init(
-        session: LanguageModelSession,
-        sessionFactory: @escaping SessionFactory,
-        configuration: CrawlerConfiguration = .default,
-        verbose: Bool = false,
-        logFileURL: URL? = nil,
-        progressContinuation: AsyncStream<CrawlProgress>.Continuation? = nil
-    ) {
-        self.session = session
-        self.sessionFactory = sessionFactory
+        self.model = model
         self.configuration = configuration
         self.verbose = verbose
         self.logFileURL = logFileURL
@@ -224,33 +187,6 @@ public struct SearchOrchestratorStep: Step, Sendable {
     /// Sends a progress update if continuation is available.
     private func sendProgress(_ progress: CrawlProgress) {
         progressContinuation?.yield(progress)
-    }
-
-    /// Creates a session for a worker.
-    ///
-    /// If `llmSupportsConcurrency` is true or no factory is provided, returns the shared session.
-    /// Otherwise, creates a new session using the factory.
-    private func createWorkerSession() -> LanguageModelSession {
-        if configuration.researchConfiguration.llmSupportsConcurrency {
-            return session
-        }
-        if let factory = sessionFactory {
-            return factory()
-        }
-        // Fallback: return shared session (may cause errors with non-concurrent LLMs)
-        return session
-    }
-
-    /// Creates a fresh session for a step to avoid context accumulation.
-    ///
-    /// Each phase should use an independent session to prevent previous JSON responses
-    /// from influencing subsequent steps. All necessary information is passed as input
-    /// parameters, so context sharing is not required.
-    private func createStepSession() -> LanguageModelSession {
-        if let factory = sessionFactory {
-            return factory()
-        }
-        return session
     }
 
     public func run(_ input: SearchQuery) async throws -> AggregatedResult {
@@ -284,6 +220,21 @@ public struct SearchOrchestratorStep: Step, Sendable {
 
         sendProgress(.started(objective: input.objective))
 
+        // ===== Phase 0.5: Query Understanding =====
+        printFlush("═══════════════════════════════════════════")
+        printFlush("📋 Phase 0.5: QUERY UNDERSTANDING")
+        printFlush("═══════════════════════════════════════════")
+        let phase05Start = Date()
+
+        let queryContext = try await ModelContextContext.withValue(ModelContext(model)) {
+            try await QueryUnderstandingStep(verbose: verbose).run(input.objective)
+        }
+
+        let phase05Duration = Date().timeIntervalSince(phase05Start)
+        printFlush("⏱️ Phase 0.5 duration: \(String(format: "%.1f", phase05Duration))s")
+        printFlush("📋 Subject: \(queryContext.subject)")
+        printFlush("")
+
         // ===== Phase 0: Initial Search =====
         printFlush("═══════════════════════════════════════════")
         printFlush("🔎 Phase 0: INITIAL SEARCH")
@@ -292,26 +243,27 @@ public struct SearchOrchestratorStep: Step, Sendable {
         let phase0Start = Date()
 
         // Disambiguate query using domain context before searching
+        // Use subject from QueryContext instead of raw objective
         let searchQuery: String
         if configuration.domainContext != nil {
             do {
-                searchQuery = try await SessionContext.$current.withValue(createStepSession()) {
+                searchQuery = try await ModelContextContext.withValue(ModelContext(model)) {
                     try await CrawlerConfigurationContext.withValue(configuration) {
                         try await QueryDisambiguationStep()
-                            .run(QueryDisambiguationInput(query: input.objective, verbose: verbose))
+                            .run(QueryDisambiguationInput(query: queryContext.subject, verbose: verbose))
                     }
                 }
-                if searchQuery != input.objective {
-                    printFlush("🔍 Searching: \(searchQuery) (disambiguated from: \(input.objective))")
+                if searchQuery != queryContext.subject {
+                    printFlush("🔍 Searching: \(searchQuery) (disambiguated from: \(queryContext.subject))")
                 } else {
                     printFlush("🔍 Searching: \(searchQuery)")
                 }
             } catch {
-                printFlush("⚠️ Query disambiguation failed: \(error), using original")
-                searchQuery = input.objective
+                printFlush("⚠️ Query disambiguation failed: \(error), using subject")
+                searchQuery = queryContext.subject
             }
         } else {
-            searchQuery = input.objective
+            searchQuery = queryContext.subject
             printFlush("🔍 Searching: \(searchQuery)")
         }
 
@@ -338,10 +290,12 @@ public struct SearchOrchestratorStep: Step, Sendable {
             backgroundInfo: initialSearchResult.summary,
             verbose: verbose
         )
-        let analysis = try await SessionContext.$current.withValue(createStepSession()) {
+        let analysis = try await ModelContextContext.withValue(ModelContext(model)) {
             try await CrawlerConfigurationContext.withValue(configuration) {
-                try await ObjectiveAnalysisStep(progressContinuation: progressContinuation)
-                    .run(analysisInput)
+                try await QueryContextContext.withValue(queryContext) {
+                    try await ObjectiveAnalysisStep(progressContinuation: progressContinuation)
+                        .run(analysisInput)
+                }
             }
         }
 
@@ -459,7 +413,7 @@ public struct SearchOrchestratorStep: Step, Sendable {
                 newRelevantThisRound: newRelevantThisRound,
                 verbose: verbose
             )
-            let sufficiency = try await SessionContext.$current.withValue(createStepSession()) {
+            let sufficiency = try await ModelContextContext.withValue(ModelContext(model)) {
                 try await CrawlerConfigurationContext.withValue(configuration) {
                     try await SufficiencyCheckStep(progressContinuation: progressContinuation)
                         .run(sufficiencyInput)
@@ -532,7 +486,7 @@ public struct SearchOrchestratorStep: Step, Sendable {
             successCriteria: context.successCriteria,
             verbose: verbose
         )
-        let responseMarkdown = try await SessionContext.$current.withValue(createStepSession()) {
+        let responseMarkdown = try await ModelContextContext.withValue(ModelContext(model)) {
             try await CrawlerConfigurationContext.withValue(configuration) {
                 try await ResponseBuildingStep(progressContinuation: progressContinuation)
                     .run(responseBuildingInput)
@@ -638,13 +592,15 @@ public struct SearchOrchestratorStep: Step, Sendable {
         """
 
         do {
-            let stepSession = createStepSession()
-            return try await SessionContext.$current.withValue(stepSession) {
-                let response = try await stepSession.respond {
-                    Prompt(prompt)
-                }
-                return response.content
+            let session = LanguageModelSession(
+                model: model,
+                tools: [],
+                instructions: StepInstructions.base(role: "情報収集エージェント")
+            )
+            let response = try await session.respond {
+                Prompt(prompt)
             }
+            return response.content
         } catch {
             return nil
         }
@@ -663,10 +619,8 @@ public struct SearchOrchestratorStep: Step, Sendable {
         await withTaskGroup(of: Void.self) { group in
             for workerID in 0..<context.maxConcurrent {
                 group.addTask {
-                    // Each worker gets its own session when LLM doesn't support concurrency
-                    let workerSession = self.createWorkerSession()
-                    // Use TaskLocal directly for implicit propagation to worker
-                    await SessionContext.$current.withValue(workerSession) {
+                    // Use TaskLocal to pass model and config to worker
+                    await ModelContextContext.withValue(ModelContext(self.model)) {
                         await CrawlerConfigurationContext.withValue(self.configuration) {
                             await self.worker(id: workerID, context: context)
                         }

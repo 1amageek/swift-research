@@ -48,8 +48,8 @@ Phase 5: Response Building
 
 - Swift 6.2+
 - macOS 26+ / iOS 26+
-- [Ollama](https://ollama.ai/) (Local LLM runtime)
-- Optional: Apple FoundationModels (build with `USE_FOUNDATION_MODELS=1`)
+- [Ollama](https://ollama.ai/) (Local LLM runtime) - for development/testing
+- Apple FoundationModels (default, production)
 
 ## Installation
 
@@ -64,36 +64,62 @@ swift build
 ### CLI
 
 ```bash
-# Basic usage
-.build/debug/research-cli "Features of OpenAI GPT-4.1"
+# Basic research
+research "Features of OpenAI GPT-4.1"
 
-# Output detailed logs to file
-.build/debug/research-cli "Bus timetable from Fukuyama to Innoshima" --log /tmp/research.log
+# With URL limit and JSON output
+research "Rust vs Go comparison" --limit 30 --format json
 
-# Show help
-.build/debug/research-cli --help
+# Verbose mode with logging
+research "Quantum computing trends" --verbose --log ./research.log
+
+# Interactive mode (prompts for query)
+research
 ```
 
 ### Options
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--limit` | Maximum URLs to visit | 50 |
-| `--model` | Ollama model name | lfm2.5-thinking |
-| `--format` | Output format (text/json) | text |
+| `--limit <n>` | Maximum URLs to visit | 50 |
+| `--format <type>` | Output format (text / json) | text |
 | `--verbose` | Show detailed LLM I/O | false |
-| `--log` | Log file path | none |
+| `--log <path>` | Log file path | none |
+| `--test-search` | Test search step only | false |
+| `--test-fetch` | Test fetch step only | false |
+
+**Ollama mode** (build with `USE_OTHER_MODELS=1`):
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--model <name>` | Ollama model name | lfm2.5-thinking |
+| `--base-url <url>` | Ollama server URL | http://127.0.0.1:11434 |
+| `--timeout <sec>` | Request timeout | 300.0 |
+
+### Testing Individual Steps
+
+```bash
+# Test search step (keyword → URL list)
+research "Swift Concurrency" --test-search
+
+# Test fetch step (URL → Markdown)
+research "https://developer.apple.com/swift/" --test-fetch
+```
 
 ### As a Library
 
 ```swift
 import SwiftResearch
+import SwiftAgent
+
+let model = SystemLanguageModel()  // or OllamaLanguageModel
 
 let configuration = CrawlerConfiguration(
-    modelName: "lfm2.5-thinking"
+    researchConfiguration: ResearchConfiguration(llmSupportsConcurrency: false)
 )
 
 let orchestrator = SearchOrchestratorStep(
+    model: model,
     configuration: configuration,
     verbose: true
 )
@@ -106,6 +132,90 @@ let query = SearchQuery(
 let result = try await orchestrator.run(query)
 print(result.responseMarkdown)
 ```
+
+## Build Options
+
+```bash
+# Apple FoundationModels (default, production)
+swift build
+
+# Ollama mode (development/testing)
+USE_OTHER_MODELS=1 swift build
+```
+
+## Testing
+
+### Test Suites
+
+| Suite | Purpose | Requirements |
+|-------|---------|--------------|
+| EvaluationModelTests | Unit tests for evaluation models | None |
+| PromptTendencyTests | LLM response tendency analysis | Ollama |
+| EvaluationBenchmarkTests | Quality & fact-check benchmarks | Ollama |
+
+### Running Tests
+
+```bash
+# Unit tests (no Ollama required)
+swift test --filter EvaluationModelTests
+
+# Benchmark tests (requires Ollama)
+USE_OTHER_MODELS=1 swift test --filter EvaluationBenchmarkTests
+
+# All tests
+USE_OTHER_MODELS=1 swift test
+```
+
+## Evaluation Framework
+
+SwiftResearch includes a comprehensive evaluation framework for assessing research quality.
+
+### Components
+
+- **Quality Evaluation**: Scores research output across multiple dimensions
+- **Fact Checking**: Extracts verifiable statements and validates them against web sources
+- **Task Construction**: Generates evaluation tasks based on personas and domains
+
+### Evaluation Pipeline
+
+```
+Research Execution
+    │
+    ├── Quality Evaluation (AdaptiveQualityStep)
+    │   ├── Coverage          # Information completeness
+    │   ├── Insight           # Depth of analysis
+    │   ├── Instruction Following
+    │   ├── Clarity           # Readability
+    │   ├── Technical Accuracy
+    │   └── Source Diversity
+    │
+    └── Fact Check (FactCheckOrchestratorStep)
+        ├── Statement Extraction
+        ├── Evidence Retrieval
+        └── Verification (correct/incorrect/unknown)
+```
+
+### Benchmark Results (2026-01-24)
+
+**Query**: "What is the current population of Tokyo?"
+**Model**: lfm2.5-thinking (Ollama)
+
+| Metric | Score | Baseline |
+|--------|-------|----------|
+| Overall | 92.8/100 | ≥70 |
+| Quality | 88.0/100 | ≥60 |
+| Factual Accuracy | 100% | - |
+
+**Quality Dimensions**:
+
+| Dimension | Score |
+|-----------|-------|
+| Coverage | 5/10 |
+| Insight | 7/10 |
+| Instruction Following | 10/10 |
+| Clarity | 10/10 |
+| Technical Accuracy | 10/10 |
+| Source Diversity | 10/10 |
 
 ## Design Principles
 
@@ -135,8 +245,6 @@ let searchStep = SearchStep(searchEngine: .duckDuckGo)
 let urls = try await searchStep.run(KeywordSearchInput(keyword: "swift concurrency"))
 ```
 
-This aligns with the **modular pipeline** architecture pattern described in [Agentic RAG research](https://arxiv.org/abs/2501.09136), where specialized modules handle distinct tasks within the agent workflow.
-
 ### Structured vs Markdown
 
 - **Structured (@Generable)**: Data for programmatic processing (bool flags, keyword arrays, link indices)
@@ -146,72 +254,10 @@ This aligns with the **modular pipeline** architecture pattern described in [Age
 
 Phase 3 uses multiple workers (default: 4) to process URLs concurrently:
 
-- **CrawlContext**: Thread-safe shared state using NSLock
-- **Known Facts Sharing**: Each worker sees facts discovered by others, reducing duplicate extraction
-- **Domain Learning**: Tracks which domains yield relevant content (2+ relevant pages)
-- **Dynamic Queue**: Workers add DeepCrawl URLs to shared queue for other workers to process
-
-### Hysteresis in LLM Decisions
-
-DeepCrawl and sufficiency checks consider past results:
-
-- **DeepCrawl**: Stop when consecutive irrelevant pages are encountered
-- **Sufficiency Check**: Give up when no new relevant pages are found
-
-## Evaluation Framework
-
-SwiftResearch includes a comprehensive evaluation framework for assessing research quality:
-
-### Components
-
-- **Quality Evaluation**: Scores research output across multiple dimensions (Coverage, Insight, Clarity, Technical Accuracy, etc.)
-- **Fact Checking**: Extracts verifiable statements and validates them against web sources
-- **Task Construction**: Generates evaluation tasks based on personas and domains
-
-### Running Evaluations
-
-```bash
-# Run evaluation framework test
-swift run research-cli test-evaluation
-
-# With custom model
-swift run research-cli test-evaluation --model lfm2.5-thinking
-```
-
-### Benchmark Results
-
-| Metric | Score |
-|--------|-------|
-| Overall Score | 80.2/100 |
-| Quality Score | 67.0/100 |
-| Factual Accuracy | 100% |
-
-### Evaluation Architecture
-
-```
-EvaluationTask
-    ↓
-┌─────────────────────────────────┐
-│  Research Execution             │
-│  (SearchOrchestratorStep)       │
-└─────────────────────────────────┘
-    ↓
-┌─────────────────────────────────┐
-│  Quality Evaluation             │
-│  - Dimension Generation         │
-│  - Dimension Scoring            │
-│  - Overall Assessment           │
-└─────────────────────────────────┘
-    ↓
-┌─────────────────────────────────┐
-│  Fact Checking                  │
-│  - Statement Extraction         │
-│  - Evidence Retrieval           │
-│  - Verification                 │
-└─────────────────────────────────┘
-    ↓
-EvaluationResult
-```
+- **CrawlContext**: Thread-safe shared state using Mutex
+- **Known Facts Sharing**: Each worker sees facts discovered by others
+- **Domain Learning**: Tracks which domains yield relevant content
+- **Dynamic Queue**: Workers add DeepCrawl URLs to shared queue
 
 ## Dependencies
 
