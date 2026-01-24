@@ -92,10 +92,25 @@ public struct ObjectiveAnalysisStep: Step, Sendable {
         「\(queryContext.subject)」について以下の3つを生成してください。
 
         ## 1. 検索キーワード（keywords）
-        「\(queryContext.subject)」に関する情報を見つけるためのWeb検索キーワードを生成。
-        - 英語で記述（固有名詞は元の言語も可）
-        - 検索エンジン向けに最適化
-        - キーワードを複数生成すること
+
+        ### 検索エンジンの仕組み
+        - キーワードは**検索エンジン**に入力される
+        - 検索エンジンはキーワードに一致するWebページを返す
+        - 一般的すぎる語は無関係な結果を大量に返す
+        - 具体的で絞り込まれたキーワードほど、目的の情報に到達しやすい
+
+        ### 検索の流れ
+        キーワードは**配列の先頭から順に**検索される。
+        最初のキーワードで目的の情報に近づくことが重要。
+
+        ### 思考プロセス
+        1. ユーザーが本当に知りたいことは何か？
+        2. その情報が載っているWebページを見つけるには、どんな検索語が効果的か？
+        3. 検索結果を絞り込むために、どの語を組み合わせるべきか？
+
+        ### 生成規則
+        - 関連性の高い言語で記述（固有名詞は元の言語も可）
+        - 最も具体的で関連性の高いキーワードを先頭に配置
 
         ## 2. 具体的な問い（questions）
         「\(queryContext.subject)」について答えるべき問いを生成。
@@ -144,9 +159,15 @@ public struct ObjectiveAnalysisStep: Step, Sendable {
                 return ObjectiveAnalysis.fallback(objective: queryContext.subject)
             }
 
-            let uniqueKeywords = Array(Set(rawAnalysis.keywords)).prefix(5)
-            let uniqueQuestions = Array(Set(rawAnalysis.questions)).prefix(5)
-            let uniqueCriteria = Array(Set(rawAnalysis.successCriteria))
+            // Remove duplicates while preserving LLM's intended order
+            func removeDuplicatesPreservingOrder(_ array: [String]) -> [String] {
+                var seen = Set<String>()
+                return array.filter { seen.insert($0).inserted }
+            }
+
+            let uniqueKeywords = Array(removeDuplicatesPreservingOrder(rawAnalysis.keywords).prefix(5))
+            let uniqueQuestions = Array(removeDuplicatesPreservingOrder(rawAnalysis.questions).prefix(5))
+            let uniqueCriteria = removeDuplicatesPreservingOrder(rawAnalysis.successCriteria)
 
             return ObjectiveAnalysis(
                 keywords: Array(uniqueKeywords),
