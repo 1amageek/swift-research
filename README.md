@@ -53,6 +53,14 @@ Phase 5: Response Building
 
 ## Installation
 
+### Using Mint (Recommended)
+
+```bash
+mint install 1amageek/swift-research
+```
+
+### From Source
+
 ```bash
 git clone https://github.com/1amageek/swift-research.git
 cd swift-research

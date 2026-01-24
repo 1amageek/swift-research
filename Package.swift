@@ -21,7 +21,7 @@ let package = Package(
             targets: ["SwiftResearch"]
         ),
         .executable(
-            name: "research-cli",
+            name: "research",
             targets: ["ResearchCLI"]
         )
     ],
@@ -32,7 +32,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.7.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.0"),
     ] + (useOtherModels ? [
-        .package(path: "../OpenFoundationModels-Ollama"),
+        .package(url: "https://github.com/1amageek/OpenFoundationModels-Ollama.git", branch: "main"),
     ] : []),
     targets: [
         .target(
