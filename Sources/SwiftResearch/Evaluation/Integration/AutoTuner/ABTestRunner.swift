@@ -9,6 +9,7 @@ import SwiftAgent
 /// and compares the results to determine if the variant is an improvement.
 public struct ABTestRunner: Sendable {
     @Session private var session: LanguageModelSession
+    @Context private var modelContext: ModelContext
     @Context private var crawlerConfig: CrawlerConfiguration
 
     /// The A/B test configuration.
@@ -83,6 +84,7 @@ public struct ABTestRunner: Sendable {
 
         let orchestrator = EvaluationOrchestratorStep()
             .session(session)
+            .context(modelContext)
             .context(crawlerConfig)
 
         let result = try await orchestrator.run(input)

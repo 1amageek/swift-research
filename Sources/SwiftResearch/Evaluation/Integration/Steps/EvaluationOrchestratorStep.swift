@@ -46,7 +46,8 @@ public struct EvaluationInput: Sendable {
 /// let step = EvaluationOrchestratorStep()
 /// let result = try await step
 ///     .session(session)
-///     .context(CrawlerConfiguration.self, value: config)
+///     .context(ModelContext(model))
+///     .context(crawlerConfig)
 ///     .run(EvaluationInput(task: task, researchResult: result))
 /// ```
 public struct EvaluationOrchestratorStep: Step, Sendable {
@@ -54,6 +55,7 @@ public struct EvaluationOrchestratorStep: Step, Sendable {
     public typealias Output = EvaluationResult
 
     @Session private var session: LanguageModelSession
+    @Context private var modelContext: ModelContext
     @Context private var crawlerConfig: CrawlerConfiguration
 
     /// Creates a new evaluation orchestrator step.
@@ -142,7 +144,7 @@ public struct EvaluationOrchestratorStep: Step, Sendable {
         config: EvaluationConfiguration
     ) async throws -> FactCheckResult {
         let factCheckStep = FactCheckOrchestratorStep()
-            .session(session)
+            .context(modelContext)
             .context(crawlerConfig)
 
         return try await factCheckStep.run(

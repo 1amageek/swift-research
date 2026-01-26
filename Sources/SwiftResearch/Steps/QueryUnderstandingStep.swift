@@ -72,7 +72,7 @@ public struct QueryUnderstandingStep: Step, Sendable {
                 printFlush("")
             }
 
-            let subject = response.subject.trimmingCharacters(in: .whitespacesAndNewlines)
+            let subject = response.subject.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
 
             if subject.isEmpty {
                 printFlush("⚠️ LLM returned empty subject, using query as fallback")

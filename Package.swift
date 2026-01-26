@@ -32,7 +32,8 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.7.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.0"),
     ] + (useOtherModels ? [
-        .package(url: "https://github.com/1amageek/OpenFoundationModels-Ollama.git", branch: "main"),
+        .package(path: "../OpenFoundationModels-Ollama"),
+        .package(path: "../OpenFoundationModels-Claude"),
     ] : []),
     targets: [
         .target(
@@ -40,6 +41,7 @@ let package = Package(
             dependencies: [
                 .product(name: "Selenops", package: "Selenops"),
                 .product(name: "SwiftAgent", package: "SwiftAgent"),
+                .product(name: "AgentTools", package: "SwiftAgent"),
                 .product(name: "RemarkKit", package: "Remark"),
             ],
             swiftSettings: useOtherModels ? [.define("USE_OTHER_MODELS")] : []
@@ -51,6 +53,7 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ] + (useOtherModels ? [
                 .product(name: "OpenFoundationModelsOllama", package: "OpenFoundationModels-Ollama"),
+                .product(name: "OpenFoundationModelsClaude", package: "OpenFoundationModels-Claude"),
             ] : []),
             swiftSettings: useOtherModels ? [.define("USE_OTHER_MODELS")] : []
         ),
@@ -58,6 +61,7 @@ let package = Package(
             name: "SwiftResearchTests",
             dependencies: ["SwiftResearch"] + (useOtherModels ? [
                 .product(name: "OpenFoundationModelsOllama", package: "OpenFoundationModels-Ollama"),
+                .product(name: "OpenFoundationModelsClaude", package: "OpenFoundationModels-Claude"),
             ] : []),
             swiftSettings: useOtherModels ? [.define("USE_OTHER_MODELS")] : []
         ),

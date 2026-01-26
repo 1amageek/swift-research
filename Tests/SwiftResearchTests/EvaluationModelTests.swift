@@ -12,7 +12,7 @@ struct EvaluationModelTests {
     func factVerificationResultWithCorrection() {
         let statement = VerifiableStatement(
             text: "The population of Tokyo is 50 million",
-            type: .numericClaim,
+            type: .numeric,
             sourceSection: "Demographics",
             verifiabilityConfidence: 0.9,
             suggestedSearchQuery: "Tokyo population 2024"
@@ -36,7 +36,7 @@ struct EvaluationModelTests {
     func factVerificationResultWithoutCorrection() {
         let statement = VerifiableStatement(
             text: "Swift was released in 2014",
-            type: .temporalClaim,
+            type: .temporal,
             sourceSection: "History",
             verifiabilityConfidence: 0.95,
             suggestedSearchQuery: nil
@@ -59,7 +59,7 @@ struct EvaluationModelTests {
     func factCheckResultErrorSummary() {
         let statement1 = VerifiableStatement(
             text: "Python was created in 1985",
-            type: .temporalClaim,
+            type: .temporal,
             sourceSection: "History",
             verifiabilityConfidence: 0.9,
             suggestedSearchQuery: nil
@@ -67,7 +67,7 @@ struct EvaluationModelTests {
 
         let statement2 = VerifiableStatement(
             text: "JavaScript runs on the server",
-            type: .entityClaim,
+            type: .entity,
             sourceSection: "Technical",
             verifiabilityConfidence: 0.8,
             suggestedSearchQuery: nil
@@ -107,7 +107,7 @@ struct EvaluationModelTests {
     func factCheckResultVerificationsWithCorrections() {
         let statement1 = VerifiableStatement(
             text: "Statement 1",
-            type: .entityClaim,
+            type: .entity,
             sourceSection: "Test",
             verifiabilityConfidence: 0.9,
             suggestedSearchQuery: nil
@@ -115,7 +115,7 @@ struct EvaluationModelTests {
 
         let statement2 = VerifiableStatement(
             text: "Statement 2",
-            type: .entityClaim,
+            type: .entity,
             sourceSection: "Test",
             verifiabilityConfidence: 0.9,
             suggestedSearchQuery: nil
@@ -256,7 +256,7 @@ struct EvaluationModelTests {
     func verifiableStatementWithSearchQuery() {
         let statement = VerifiableStatement(
             text: "Apple acquired OpenAI in 2024",
-            type: .entityClaim,
+            type: .entity,
             sourceSection: "Business News",
             verifiabilityConfidence: 0.95,
             suggestedSearchQuery: "Apple OpenAI acquisition 2024"
@@ -271,7 +271,7 @@ struct EvaluationModelTests {
     func verifiableStatementWithoutSearchQuery() {
         let statement = VerifiableStatement(
             text: "Water boils at 100 degrees Celsius",
-            type: .numericClaim,
+            type: .numeric,
             sourceSection: "Science",
             verifiabilityConfidence: 0.99,
             suggestedSearchQuery: nil

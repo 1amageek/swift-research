@@ -2,35 +2,36 @@ import Foundation
 import SwiftAgent
 
 /// Type of verifiable statement.
+/// Case names are kept simple to match LLM natural output patterns.
 @Generable
 public enum StatementType: String, Sendable, Codable, CaseIterable {
     /// Numbers, statistics, quantities.
-    case numericClaim = "Numeric"
+    case numeric = "numeric"
 
     /// Dates, time periods, events.
-    case temporalClaim = "Temporal"
+    case temporal = "temporal"
 
     /// Named entities, relationships.
-    case entityClaim = "Entity"
+    case entity = "entity"
 
     /// Cause-effect relationships.
-    case causalClaim = "Causal"
+    case causal = "causal"
 
     /// Comparisons between entities.
-    case comparativeClaim = "Comparative"
+    case comparative = "comparative"
 
     /// Description of this statement type.
     public var typeDescription: String {
         switch self {
-        case .numericClaim:
+        case .numeric:
             return "Claims involving numbers, statistics, percentages, or quantities"
-        case .temporalClaim:
+        case .temporal:
             return "Claims about dates, time periods, or when events occurred"
-        case .entityClaim:
+        case .entity:
             return "Claims about named entities, their properties, or relationships"
-        case .causalClaim:
+        case .causal:
             return "Claims about cause-and-effect relationships"
-        case .comparativeClaim:
+        case .comparative:
             return "Claims comparing two or more entities"
         }
     }
@@ -38,15 +39,15 @@ public enum StatementType: String, Sendable, Codable, CaseIterable {
     /// Example of this statement type.
     public var example: String {
         switch self {
-        case .numericClaim:
+        case .numeric:
             return "The population is 14 million"
-        case .temporalClaim:
+        case .temporal:
             return "The product was released in 2024"
-        case .entityClaim:
+        case .entity:
             return "Apple acquired the company"
-        case .causalClaim:
+        case .causal:
             return "This led to improved performance"
-        case .comparativeClaim:
+        case .comparative:
             return "System A is faster than System B"
         }
     }

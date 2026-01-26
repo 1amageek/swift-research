@@ -7,8 +7,14 @@ LLMを活用した自律的Webリサーチライブラリ。ユーザーの質�
 ```
 SwiftResearch/
 ├── Sources/SwiftResearch/
-│   ├── Steps/                            # 処理ステップ
-│   │   ├── SearchOrchestratorStep.swift  # メインオーケストレーター
+│   ├── Agent/                            # Agenticアーキテクチャ
+│   │   ├── ResearchAgent.swift           # メインリサーチエージェント
+│   │   └── Tools/                        # AgentSession用ツール
+│   │       ├── WebSearchTool.swift
+│   │       ├── FetchToolWithLinks.swift
+│   │       └── EvaluateSufficiencyTool.swift
+│   ├── Steps/                            # 処理ステップ（ワークフロー用）
+│   │   ├── SearchOrchestratorStep.swift  # ワークフローオーケストレーター
 │   │   ├── SearchStep.swift              # 検索実行Step
 │   │   └── ...
 │   ├── Models/                           # データモデル
@@ -26,7 +32,49 @@ SwiftResearch/
 
 ## アーキテクチャ
 
-### 処理フロー
+### 2つのアプローチ
+
+本プロジェクトは2つのアーキテクチャをサポート:
+
+| アプローチ | 実装 | 特徴 |
+|-----------|------|------|
+| **Agentic** | `ResearchAgent` | LLMが自律的にTool呼び出しを判断 |
+| **Workflow** | `SearchOrchestratorStep` | 固定フェーズを順次実行 |
+
+**推奨:** 新規開発は**Agentic**を使用。ワークフローは柔軟性に限界がある。
+
+### ResearchAgent（Agentic）
+
+```swift
+let agent = ResearchAgent(
+    model: model,
+    configuration: .init(maxURLs: 20)
+)
+
+let result = try await agent.research("Swift Concurrencyとは？")
+print(result.answer)
+```
+
+**構成要素:**
+
+```
+ResearchAgent
+    │
+    ▼
+AgentSession(model, tools: [...])
+    │
+    ├── WebSearchTool       # Web検索
+    ├── FetchToolWithLinks  # ページ取得
+    └── EvaluateSufficiencyTool  # 情報十分性評価
+```
+
+LLMがInstructionsに従い、適切なToolを自律的に呼び出す。
+
+### SearchOrchestratorStep（Workflow）
+
+固定フェーズを順次実行する従来のアプローチ。
+
+#### 処理フロー
 
 ```
 SearchQuery(objective, maxURLs)
@@ -65,6 +113,18 @@ SearchQuery(objective, maxURLs)
 ```
 
 ### コア設計
+
+**Agentic（推奨）:**
+
+| コンポーネント | 責務 |
+|---------------|------|
+| `ResearchAgent` | AgentSessionを使用した自律リサーチ |
+| `AgentSession` | LLMとToolの対話を管理 |
+| `WebSearchTool` | Web検索を実行 |
+| `FetchToolWithLinks` | ページ取得とリンク抽出 |
+| `EvaluateSufficiencyTool` | 情報十分性を評価（内部で独自Session使用） |
+
+**Workflow:**
 
 | コンポーネント | 責務 |
 |---------------|------|
@@ -170,6 +230,66 @@ public struct TaskResponse: Sendable {
 ```
 
 **制限:** Dictionary型は未サポート
+
+### Tool と構造化出力
+
+AgentSessionでの会話中に`respond(generating: T.self)`を使用すると、JSONスキーマがInstructionsに含まれない場合がある。これがLLMのスキーマ無視によるJSON出力エラーの原因となる。
+
+**解決策: Toolパターン**
+
+Toolは呼び出し時に独自のSessionを作成し、InstructionsにJSONスキーマを含めることで成功率を向上させる。
+
+```swift
+// EvaluateSufficiencyTool: 別Sessionで構造化出力を実行
+public struct EvaluateSufficiencyTool: Tool {
+    public typealias Arguments = SufficiencyInput
+    public typealias Output = SufficiencyOutput
+
+    private let model: any LanguageModel
+
+    public func call(arguments: Arguments) async throws -> Output {
+        // Tool内で新しいSessionを作成
+        // このSessionのInstructionsにはJSONスキーマが含まれる
+        let session = LanguageModelSession(
+            model: model,
+            tools: [],
+            instructions: sufficiencyInstructions
+        )
+
+        let response = try await session.respond(
+            to: buildPrompt(arguments),
+            generating: SufficiencyOutput.self
+        )
+        return response.content
+    }
+}
+```
+
+**パターン比較:**
+
+| パターン | スキーマ配置 | 成功率 |
+|---------|-------------|--------|
+| AgentSession内Generate | 会話履歴に埋没 | 低い |
+| Tool内Session | Instructions内 | 高い |
+
+**評価ToolをResearchAgentに統合する場合:**
+
+```swift
+// ResearchAgentにファクトチェック機能を追加
+let session = AgentSession(
+    model: model,
+    tools: [
+        searchTool,
+        fetchTool,
+        sufficiencyTool,
+        // 評価Tools（各Tool内で独自Sessionを使用）
+        StatementExtractorTool(model: model),
+        FactVerifierTool(model: model)
+    ]
+) {
+    Instructions(...)
+}
+```
 
 ## Security（参考）
 

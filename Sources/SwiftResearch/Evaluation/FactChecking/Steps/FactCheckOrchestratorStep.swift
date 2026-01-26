@@ -47,18 +47,20 @@ public struct FactCheckInput: Sendable {
 /// 3. Verifies each statement based on evidence
 /// 4. Aggregates results into a comprehensive fact-check report
 ///
+/// Each child step creates its own internal session for LLM calls.
+///
 /// ```swift
 /// let step = FactCheckOrchestratorStep()
 /// let result = try await step
-///     .session(session)
-///     .context(CrawlerConfiguration.self, value: config)
+///     .context(ModelContext(model))
+///     .context(crawlerConfig)
 ///     .run(FactCheckInput(researchOutput: markdown))
 /// ```
 public struct FactCheckOrchestratorStep: Step, Sendable {
     public typealias Input = FactCheckInput
     public typealias Output = FactCheckResult
 
-    @Session private var session: LanguageModelSession
+    @Context private var modelContext: ModelContext
     @Context private var crawlerConfig: CrawlerConfiguration
 
     /// Creates a new fact check orchestrator step.
@@ -66,15 +68,22 @@ public struct FactCheckOrchestratorStep: Step, Sendable {
 
     public func run(_ input: FactCheckInput) async throws -> FactCheckResult {
         // Step 1: Extract verifiable statements
-        let extractor = StatementExtractorStep()
-            .session(session)
+        let extractorStep = StatementExtractorStep()
+            .context(modelContext)
 
-        let statements = try await extractor.run(
-            StatementExtractionInput(
-                researchOutput: input.researchOutput,
-                maxStatements: input.maxStatements
-            )
+        let extractionResponse = try await extractorStep.run(
+            ExtractionRequest(text: input.researchOutput, maxStatements: input.maxStatements)
         )
+
+        let statements = extractionResponse.statements.prefix(input.maxStatements).map { extracted in
+            VerifiableStatement(
+                text: extracted.text,
+                type: extracted.type,
+                sourceSection: extracted.sourceSection,
+                verifiabilityConfidence: extracted.verifiabilityConfidence,
+                suggestedSearchQuery: extracted.suggestedSearchQuery.isEmpty ? nil : extracted.suggestedSearchQuery
+            )
+        }
 
         // Step 2 & 3: Retrieve evidence and verify each statement
         let verifications = try await verifyStatements(
@@ -90,16 +99,16 @@ public struct FactCheckOrchestratorStep: Step, Sendable {
         _ statements: [VerifiableStatement],
         input: FactCheckInput
     ) async throws -> [FactVerificationResult] {
-        // Process statements sequentially to avoid concurrency issues with @Session
+        // Process statements sequentially
         var results: [FactVerificationResult] = []
 
         for statement in statements {
             let evidenceRetriever = EvidenceRetrievalStep()
-                .session(session)
+                .context(modelContext)
                 .context(crawlerConfig)
 
             let verifier = FactVerifierStep()
-                .session(session)
+                .context(modelContext)
 
             do {
                 // Retrieve evidence

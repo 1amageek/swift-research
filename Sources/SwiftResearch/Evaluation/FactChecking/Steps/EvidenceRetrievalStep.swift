@@ -42,15 +42,15 @@ public struct EvidenceRetrievalInput: Sendable {
 /// ```swift
 /// let step = EvidenceRetrievalStep()
 /// let evidence = try await step
-///     .session(session)
-///     .context(CrawlerConfiguration.self, value: config)
+///     .context(ModelContext(model))
+///     .context(crawlerConfig)
 ///     .run(EvidenceRetrievalInput(statement: statement, evidenceCount: 3))
 /// ```
 public struct EvidenceRetrievalStep: Step, Sendable {
     public typealias Input = EvidenceRetrievalInput
     public typealias Output = [Evidence]
 
-    @Session private var session: LanguageModelSession
+    @Context private var modelContext: ModelContext
     @Context private var crawlerConfig: CrawlerConfiguration
 
     /// Creates a new evidence retrieval step.
@@ -109,31 +109,33 @@ public struct EvidenceRetrievalStep: Step, Sendable {
         }
 
         // Priority 2: Use the LLM-suggested query from statement extraction
-        // This avoids redundant LLM calls since the extraction model already analyzed the statement
         if let suggestedQuery = input.statement.suggestedSearchQuery {
             return [suggestedQuery]
         }
 
         // Priority 3: Generate new search queries using LLM (fallback)
+        let session = LanguageModelSession(
+            model: modelContext.model,
+            tools: [],
+            instructions: "あなたは検索クエリ生成アシスタントです。事実検証のための効果的な検索クエリを生成してください。"
+        )
+
         let prompt = """
-        Generate search queries to verify the following statement:
+        以下の声明を検証するための検索クエリを生成してください:
 
-        Statement: \(input.statement.text)
-        Type: \(input.statement.type.rawValue)
+        声明: \(input.statement.text)
+        種類: \(input.statement.type.rawValue)
 
-        Generate 2-3 search queries that would help find evidence to verify or refute this statement.
-        Focus on finding authoritative sources.
-
-        IMPORTANT: Respond with a valid JSON object only. Do not include markdown formatting or code fences.
+        この声明を検証または反証するための証拠を見つけるための2-3個の検索クエリを生成してください。
+        信頼性の高いソースを見つけることに重点を置いてください。
         """
 
-        let generateStep = Generate<String, VerificationSearchQueryResponse>(
-            session: session,
-            prompt: { Prompt($0) }
+        let response = try await session.respond(
+            to: prompt,
+            generating: VerificationSearchQueryResponse.self
         )
-        let response = try await generateStep.run(prompt)
 
-        return response.queries
+        return response.content.queries
     }
 
     private func analyzePageForEvidence(
@@ -144,36 +146,38 @@ public struct EvidenceRetrievalStep: Step, Sendable {
         let remark = try await Remark.fetch(from: url, timeout: 10)
         let content = String(remark.markdown.prefix(5000))
 
-        // Analyze for evidence
+        // Create session for analysis
+        let session = LanguageModelSession(
+            model: modelContext.model,
+            tools: [],
+            instructions: "あなたは証拠分析アシスタントです。ページ内容を分析し、声明に対する証拠を抽出してください。"
+        )
+
         let prompt = """
-        Analyze the following page content to determine if it provides evidence
-        for or against this statement:
+        以下のページ内容を分析し、声明に対する証拠となるかどうかを判断してください:
 
-        Statement: \(statement.text)
+        声明: \(statement.text)
 
-        Page Title: \(remark.title)
-        Page Content:
+        ページタイトル: \(remark.title)
+        ページ内容:
         ---
         \(content)
         ---
 
-        Determine:
-        1. Does this page contain relevant evidence?
-        2. How does the evidence support or contradict the statement?
-        3. What is the credibility of this source?
+        判断項目:
+        1. このページに関連する証拠が含まれているか
+        2. 証拠は声明を支持するか、反論するか
+        3. このソースの信頼性はどの程度か
 
-        If no relevant evidence is found, indicate "neutral" support level.
-
-        IMPORTANT: Respond with a valid JSON object only. Do not include markdown formatting or code fences.
+        関連する証拠が見つからない場合は、supportLevel を "Neutral" としてください。
         """
 
-        let generateStep = Generate<String, EvidenceAnalysisResponse>(
-            session: session,
-            prompt: { Prompt($0) }
+        let response = try await session.respond(
+            to: prompt,
+            generating: EvidenceAnalysisResponse.self
         )
-        let response = try await generateStep.run(prompt)
 
-        let analysisResult = response
+        let analysisResult = response.content
 
         // Skip if neutral and not useful
         guard analysisResult.supportLevel != SupportLevel.neutral || !analysisResult.relevantText.isEmpty else {

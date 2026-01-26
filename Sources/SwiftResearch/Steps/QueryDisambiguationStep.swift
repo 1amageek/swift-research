@@ -78,7 +78,7 @@ public struct QueryDisambiguationStep: Step, Sendable {
             }
 
             let disambiguatedQuery = response.content
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
                 .replacingOccurrences(of: "\"", with: "")  // Remove quotes if any
 
             if input.verbose {

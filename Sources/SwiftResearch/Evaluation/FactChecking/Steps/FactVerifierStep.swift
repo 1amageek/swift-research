@@ -41,14 +41,14 @@ public struct FactVerificationInput: Sendable {
 /// ```swift
 /// let step = FactVerifierStep()
 /// let result = try await step
-///     .session(session)
+///     .context(ModelContext(model))
 ///     .run(FactVerificationInput(statement: statement, evidence: evidence))
 /// ```
 public struct FactVerifierStep: Step, Sendable {
     public typealias Input = FactVerificationInput
     public typealias Output = FactVerificationResult
 
-    @Session private var session: LanguageModelSession
+    @Context private var modelContext: ModelContext
 
     /// Creates a new fact verifier step.
     public init() {}
@@ -65,72 +65,85 @@ public struct FactVerifierStep: Step, Sendable {
             )
         }
 
+        // Create internal session for verification
+        let session = LanguageModelSession(
+            model: modelContext.model,
+            tools: [],
+            instructions: verificationInstructions
+        )
+
         let prompt = buildPrompt(for: input)
 
-        let generateStep = Generate<String, FactVerificationResponse>(
-            session: session,
-            prompt: { Prompt($0) }
+        let response = try await session.respond(
+            to: prompt,
+            generating: FactVerificationResponse.self
         )
-        let response = try await generateStep.run(prompt)
+
+        let verificationResult = response.content
 
         // Only include correction if verdict indicates an error
-        let correction: String? = switch response.verdict {
+        let correction: String? = switch verificationResult.verdict {
         case .incorrect, .partiallyCorrect:
-            response.correction.isEmpty ? nil : response.correction
+            verificationResult.correction.isEmpty ? nil : verificationResult.correction
         case .correct, .unknown, .errorOccurred:
             nil
         }
 
         return FactVerificationResult(
             statement: input.statement,
-            verdict: response.verdict,
+            verdict: verificationResult.verdict,
             evidence: input.evidence,
-            confidence: response.confidence,
-            explanation: response.explanation,
+            confidence: verificationResult.confidence,
+            explanation: verificationResult.explanation,
             correction: correction
         )
+    }
+
+    private var verificationInstructions: String {
+        """
+        あなたは事実検証アシスタントです。
+        収集された証拠に基づいて声明の正確性を判断してください。
+
+        判定基準:
+        - correct: 証拠が声明を強く支持している
+        - incorrect: 証拠が声明を明確に否定している
+        - partiallyCorrect: 声明は概ね正しいが不正確な部分がある
+        - unknown: 証拠が不十分または矛盾している
+
+        確信度基準:
+        - 0.9以上: 複数の高信頼性ソースが一致
+        - 0.7-0.9: 少なくとも1つの高信頼性ソースが支持
+        - 0.5-0.7: 証拠が混在または中程度の信頼性
+        - 0.5未満: 証拠が弱いまたは矛盾
+        """
     }
 
     private func buildPrompt(for input: FactVerificationInput) -> String {
         let evidenceText = input.evidence.enumerated().map { index, evidence in
             """
-            Evidence \(index + 1):
-            - Source: \(evidence.sourceTitle) (\(evidence.sourceURL))
-            - Support Level: \(evidence.supportLevel.rawValue)
-            - Credibility: \(String(format: "%.2f", evidence.sourceCredibility))
-            - Relevant Text: \(evidence.relevantText)
+            証拠 \(index + 1):
+            - ソース: \(evidence.sourceTitle) (\(evidence.sourceURL))
+            - 支持レベル: \(evidence.supportLevel.rawValue)
+            - 信頼性: \(String(format: "%.2f", evidence.sourceCredibility))
+            - 関連テキスト: \(evidence.relevantText)
             """
         }.joined(separator: "\n\n")
 
         return """
-        Verify the following statement based on the collected evidence.
+        収集された証拠に基づいて以下の声明を検証してください。
 
-        Statement to Verify:
+        検証対象の声明:
         "\(input.statement.text)"
-        Type: \(input.statement.type.rawValue)
+        種類: \(input.statement.type.rawValue)
 
-        Collected Evidence:
+        収集された証拠:
         \(evidenceText)
 
-        Based on the evidence, determine:
-        1. Is the statement correct, incorrect, partially correct, or unknown?
-        2. What is your confidence in this verdict (0.0-1.0)?
-        3. Explain your reasoning based on the evidence.
-        4. If incorrect or partially correct, what is the correct information?
-
-        Verdict Guidelines:
-        - correct: Evidence strongly supports the statement
-        - incorrect: Evidence clearly contradicts the statement
-        - partiallyCorrect: Statement is mostly correct but has inaccuracies
-        - unknown: Evidence is insufficient or conflicting
-
-        Confidence Guidelines:
-        - 0.9+: Multiple high-credibility sources agree
-        - 0.7-0.9: At least one high-credibility source supports
-        - 0.5-0.7: Evidence is mixed or from moderate-credibility sources
-        - <0.5: Evidence is weak or conflicting
-
-        IMPORTANT: Respond with a valid JSON object only. Do not include markdown formatting or code fences.
+        判断項目:
+        1. 声明は正しいか、誤りか、部分的に正しいか、不明か
+        2. この判定に対する確信度 (0.0-1.0)
+        3. 証拠に基づいた推論の説明
+        4. 誤りまたは部分的に正しい場合、正しい情報は何か
         """
     }
 }

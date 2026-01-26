@@ -26,11 +26,6 @@ public enum StepInstructions {
         # 現在の日時
         \(currentDateTime) (\(timeZone))
 
-        # 出力規則
-        - 常に有効なJSONオブジェクトで応答する（'{'で開始）
-        - 配列フィールドはJSON配列として出力
-        - Markdownコードフェンスは含めない
-
         # 重要: フィールド値の生成規則
         - JSON Schemaのdescriptionは「説明」であり「値」ではない
         - descriptionをそのままコピーして値として使用しないこと

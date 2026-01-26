@@ -2,10 +2,12 @@ import Foundation
 import ArgumentParser
 import SwiftResearch
 import SwiftAgent
+import AgentTools
 import RemarkKit
 
 #if USE_OTHER_MODELS
 import OpenFoundationModelsOllama
+import OpenFoundationModelsClaude
 
 enum OllamaError: Error, LocalizedError {
     case connectionFailed
@@ -92,10 +94,13 @@ struct ResearchCLI: AsyncParsableCommand {
     var log: String?
 
     #if USE_OTHER_MODELS
-    @Option(name: .long, help: "Ollama model name")
+    @Flag(name: .long, help: "Use Claude API")
+    var claude: Bool = false
+
+    @Option(name: .long, help: "Ollama model name (ignored if --claude)")
     var model: String = "lfm2.5-thinking"
 
-    @Option(name: .long, help: "Ollama base URL")
+    @Option(name: .long, help: "Ollama base URL (ignored if --claude)")
     var baseURL: String = "http://127.0.0.1:11434"
 
     @Option(name: .long, help: "Request timeout in seconds")
@@ -110,6 +115,9 @@ struct ResearchCLI: AsyncParsableCommand {
     @Flag(name: .long, help: "Test fetch step only")
     var testFetch: Bool = false
 
+    @Flag(name: .long, help: "Use AgentSession-based research (experimental)")
+    var agent: Bool = false
+
     // MARK: - Run
 
     func run() async throws {
@@ -117,6 +125,8 @@ struct ResearchCLI: AsyncParsableCommand {
             try await runTestSearch()
         } else if testFetch {
             try await runTestFetch()
+        } else if agent {
+            try await runAgentResearch()
         } else {
             try await runResearch()
         }
@@ -139,17 +149,19 @@ struct ResearchCLI: AsyncParsableCommand {
         }
 
         #if USE_OTHER_MODELS
-        guard let baseURLParsed = URL(string: baseURL) else {
-            print("Invalid base URL: \(baseURL)")
-            throw ExitCode.failure
-        }
-        do {
-            try await validateOllamaModel(baseURL: baseURLParsed, modelName: model)
-        } catch let error as OllamaError {
-            print(error.localizedDescription)
-            throw ExitCode.failure
-        } catch {
-            print("Skipping model validation: \(error.localizedDescription)")
+        if !claude {
+            guard let baseURLParsed = URL(string: baseURL) else {
+                print("Invalid base URL: \(baseURL)")
+                throw ExitCode.failure
+            }
+            do {
+                try await validateOllamaModel(baseURL: baseURLParsed, modelName: model)
+            } catch let error as OllamaError {
+                print(error.localizedDescription)
+                throw ExitCode.failure
+            } catch {
+                print("Skipping model validation: \(error.localizedDescription)")
+            }
         }
         #endif
 
@@ -190,6 +202,96 @@ struct ResearchCLI: AsyncParsableCommand {
         }
 
         outputResult(result)
+    }
+
+    // MARK: - Agent Research
+
+    private func runAgentResearch() async throws {
+        let finalQuery: String
+        if let q = query, !q.isEmpty {
+            finalQuery = q
+        } else {
+            print("Enter research query:")
+            print("> ", terminator: "")
+            guard let input = readLine(), !input.isEmpty else {
+                print("No query provided")
+                throw ExitCode.failure
+            }
+            finalQuery = input
+        }
+
+        #if USE_OTHER_MODELS
+        if !claude {
+            guard let baseURLParsed = URL(string: baseURL) else {
+                print("Invalid base URL: \(baseURL)")
+                throw ExitCode.failure
+            }
+            do {
+                try await validateOllamaModel(baseURL: baseURLParsed, modelName: model)
+            } catch let error as OllamaError {
+                print(error.localizedDescription)
+                throw ExitCode.failure
+            } catch {
+                print("Skipping model validation: \(error.localizedDescription)")
+            }
+        }
+        #endif
+
+        let languageModel = try createModel()
+        let configuration = ResearchAgent.Configuration(
+            maxURLs: limit,
+            blockedDomains: [],
+            verbose: verbose
+        )
+
+        let researchAgent = ResearchAgent(
+            model: languageModel,
+            configuration: configuration
+        )
+
+        print("Starting AgentSession-based research...")
+        #if USE_OTHER_MODELS
+        if claude {
+            print("Model: Claude Sonnet 4.5 (claude-sonnet-4-5-20250929)")
+        } else {
+            print("Model: Ollama (\(model))")
+        }
+        #else
+        print("Model: Apple FoundationModels")
+        #endif
+        print("Query: \(finalQuery)")
+        print("Max URLs: \(limit)")
+        print("")
+
+        do {
+            let result = try await researchAgent.research(finalQuery)
+            outputAgentResult(result)
+        } catch {
+            print("Research failed: \(error.localizedDescription)")
+            throw ExitCode.failure
+        }
+    }
+
+    private func outputAgentResult(_ result: ResearchAgent.Result) {
+        print("")
+        print("========================================")
+        print("Research Results (Agent Mode)")
+        print("========================================")
+        print("")
+        print("Duration: \(formatDuration(result.duration))")
+        print("URLs visited: \(result.visitedURLs.count)")
+        print("")
+        print("Sources:")
+        for url in result.visitedURLs {
+            print("  - \(url)")
+        }
+        print("")
+        print("Answer:")
+        print("---")
+        print(result.answer)
+        print("---")
+        print("")
+        print("========================================")
     }
 
     // MARK: - Test Search
@@ -257,6 +359,14 @@ struct ResearchCLI: AsyncParsableCommand {
 
     private func createModel() throws -> any LanguageModel {
         #if USE_OTHER_MODELS
+        if claude {
+            guard let config = ClaudeConfiguration.fromEnvironment() else {
+                print("Error: ANTHROPIC_API_KEY environment variable is not set")
+                throw ExitCode.failure
+            }
+            return ClaudeLanguageModel.sonnet4_5(configuration: config)
+        }
+
         guard let baseURLParsed = URL(string: baseURL) else {
             print("Invalid base URL: \(baseURL)")
             throw ExitCode.failure
