@@ -31,6 +31,95 @@ public struct WebSearchTool: Tool, Sendable {
         self.blockedDomains = blockedDomains
     }
 
+    /// Parses search results from DuckDuckGo markdown output.
+    /// Each result consists of a link followed by a snippet paragraph.
+    private func parseSearchResults(from markdown: String, blockedDomains: [String]) -> [SearchResult] {
+        var results: [SearchResult] = []
+        var seenURLs: Set<String> = []
+
+        // Pattern: [Title](URL) followed by text until next link or end
+        let linkPattern = "\\[([^\\]]+)\\]\\(([^)]+)\\)"
+        guard let regex = try? NSRegularExpression(pattern: linkPattern, options: []) else {
+            return results
+        }
+
+        let range = NSRange(markdown.startIndex..., in: markdown)
+        let matches = regex.matches(in: markdown, options: [], range: range)
+
+        for (i, match) in matches.enumerated() {
+            guard match.numberOfRanges >= 3,
+                  let titleRange = Range(match.range(at: 1), in: markdown),
+                  let urlRange = Range(match.range(at: 2), in: markdown) else {
+                continue
+            }
+
+            let title = String(markdown[titleRange])
+            let urlString = String(markdown[urlRange])
+
+            // Validate URL
+            guard let url = URL(string: urlString),
+                  let host = url.host,
+                  url.scheme == "https" else {
+                continue
+            }
+
+            // Skip blocked domains
+            if blockedDomains.contains(where: { host.contains($0) }) {
+                continue
+            }
+
+            // Skip search engine internal links
+            let internalPatterns = [
+                "duckduckgo.", ".google.", "google.com",
+                ".bing.", "bing.com", "yahoo.com", ".yahoo.",
+                "yandex.", "baidu.com"
+            ]
+            if internalPatterns.contains(where: { host.contains($0) }) {
+                continue
+            }
+
+            // Skip duplicates
+            if seenURLs.contains(urlString) {
+                continue
+            }
+            seenURLs.insert(urlString)
+
+            // Extract snippet: text between this link and the next link
+            let matchEnd = match.range.upperBound
+            let nextMatchStart = (i + 1 < matches.count) ? matches[i + 1].range.lowerBound : markdown.utf16.count
+
+            if matchEnd < nextMatchStart,
+               let snippetStartIndex = markdown.utf16.index(markdown.utf16.startIndex, offsetBy: matchEnd, limitedBy: markdown.utf16.endIndex),
+               let snippetEndIndex = markdown.utf16.index(markdown.utf16.startIndex, offsetBy: nextMatchStart, limitedBy: markdown.utf16.endIndex) {
+                let startIndex = String.Index(snippetStartIndex, within: markdown) ?? markdown.startIndex
+                let endIndex = String.Index(snippetEndIndex, within: markdown) ?? markdown.endIndex
+                var snippet = String(markdown[startIndex..<endIndex])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .replacingOccurrences(of: "\n", with: " ")
+                    .replacingOccurrences(of: "  ", with: " ")
+
+                // Truncate snippet if too long
+                if snippet.count > 200 {
+                    snippet = String(snippet.prefix(200)) + "..."
+                }
+
+                results.append(SearchResult(
+                    title: title,
+                    url: urlString,
+                    snippet: snippet
+                ))
+            } else {
+                results.append(SearchResult(
+                    title: title,
+                    url: urlString,
+                    snippet: ""
+                ))
+            }
+        }
+
+        return results
+    }
+
     public func call(arguments: WebSearchInput) async throws -> WebSearchOutput {
         let query = arguments.query.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -56,45 +145,10 @@ public struct WebSearchTool: Tool, Sendable {
 
         do {
             let remark = try await Remark.fetch(from: searchURL, timeout: 15)
-            let links = try remark.extractLinks()
+            let markdown = remark.markdown
 
-            var seenURLs: Set<String> = []
-            var results: [SearchResult] = []
-
-            for link in links {
-                guard let url = URL(string: link.url),
-                      let host = url.host,
-                      url.scheme == "https" else {
-                    continue
-                }
-
-                // Skip blocked domains
-                if blockedDomains.contains(where: { host.contains($0) }) {
-                    continue
-                }
-
-                // Skip search engine internal links
-                let internalPatterns = [
-                    "duckduckgo.", ".google.", "google.com",
-                    ".bing.", "bing.com", "yahoo.com", ".yahoo.",
-                    "yandex.", "baidu.com"
-                ]
-                if internalPatterns.contains(where: { host.contains($0) }) {
-                    continue
-                }
-
-                // Skip duplicates
-                let urlString = url.absoluteString
-                if seenURLs.contains(urlString) {
-                    continue
-                }
-                seenURLs.insert(urlString)
-
-                results.append(SearchResult(
-                    title: link.text.isEmpty ? host : link.text,
-                    url: urlString
-                ))
-            }
+            // Parse search results from markdown
+            let results = parseSearchResults(from: markdown, blockedDomains: blockedDomains)
 
             if results.isEmpty {
                 return WebSearchOutput(
@@ -142,9 +196,13 @@ public struct SearchResult: Sendable {
     /// The URL of the search result.
     public let url: String
 
-    public init(title: String, url: String) {
+    /// A brief description/snippet from the search result.
+    public let snippet: String
+
+    public init(title: String, url: String, snippet: String = "") {
         self.title = title
         self.url = url
+        self.snippet = snippet
     }
 }
 
@@ -182,8 +240,11 @@ extension WebSearchOutput: CustomStringConvertible {
         if !results.isEmpty {
             output += "\n\nResults:"
             for (index, result) in results.enumerated() {
-                output += "\n\(index + 1). \(result.title)"
+                output += "\n\n\(index + 1). \(result.title)"
                 output += "\n   URL: \(result.url)"
+                if !result.snippet.isEmpty {
+                    output += "\n   \(result.snippet)"
+                }
             }
         }
 

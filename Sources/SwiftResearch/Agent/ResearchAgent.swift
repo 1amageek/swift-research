@@ -138,13 +138,32 @@ public final class ResearchAgent: Sendable {
             print("DEBUG - Response content: \(response.content.prefix(500))")
             print("DEBUG - Transcript entries: \(session.transcript.count)")
             print("DEBUG - Tool calls: \(session.transcript.allToolCalls.count)")
-            for toolCall in session.transcript.allToolCalls {
-                print("DEBUG - Tool called: \(toolCall.toolName)")
-                print("DEBUG - Tool arguments: \(toolCall.arguments.jsonString)")
-            }
-            print("DEBUG - Transcript dump:")
-            for (i, entry) in session.transcript.enumerated() {
-                print("DEBUG - Entry \(i): \(entry)")
+
+            // Show tool calls with their outputs
+            let toolCalls = session.transcript.allToolCalls
+            let toolOutputs = session.transcript.allToolOutputs
+
+            for (index, toolCall) in toolCalls.enumerated() {
+                print("")
+                print("DEBUG - [\(index + 1)] Tool: \(toolCall.toolName)")
+                print("DEBUG -     Arguments: \(toolCall.arguments.jsonString)")
+
+                // Find corresponding output
+                if let output = toolOutputs.first(where: { $0.toolName == toolCall.toolName }) {
+                    let outputText = output.segments.compactMap { segment -> String? in
+                        if case .text(let textSegment) = segment {
+                            return textSegment.content
+                        }
+                        return nil
+                    }.joined()
+
+                    // Truncate long outputs
+                    let maxLen = 1000
+                    let truncated = outputText.count > maxLen
+                        ? String(outputText.prefix(maxLen)) + "...[truncated]"
+                        : outputText
+                    print("DEBUG -     Output: \(truncated)")
+                }
             }
             print("")
         }
@@ -236,7 +255,9 @@ public final class ResearchAgent: Sendable {
         - If results are poor, try broader or alternative terms
 
         ### Step 3: Fetch and Analyze Pages
-        ACTION: Call WebFetch for promising URLs.
+        ACTION: Call WebFetch with multiple URLs at once for parallel fetching.
+        - Pass an array of URLs: {"urls": ["url1", "url2", "url3"]}
+        - Fetch 3-5 URLs at a time for efficiency
         - Extract key facts, data, and quotes relevant to the query
         - Note the source's credibility
         - Follow links that promise deeper information

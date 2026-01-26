@@ -14,9 +14,9 @@ public struct FetchToolWithLinks: Tool, Sendable {
     public var name: String { Self.name }
 
     public static let description = """
-    Fetch content from a URL and extract links found in the page.
-    Returns the page content as Markdown along with a list of links.
-    Use this to read web pages and discover related content through links.
+    Fetch content from multiple URLs in parallel and extract links found in each page.
+    Accepts a list of URLs and returns content as Markdown along with links for each.
+    Use this to efficiently read multiple web pages at once.
     """
 
     public var description: String { Self.description }
@@ -28,13 +28,32 @@ public struct FetchToolWithLinks: Tool, Sendable {
     public init() {}
 
     public func call(arguments: FetchWithLinksInput) async throws -> FetchWithLinksOutput {
-        // Use RemarkKit to fetch the page
-        guard let url = URL(string: arguments.url) else {
-            return FetchWithLinksOutput(
+        // Fetch all URLs in parallel
+        let results = await withTaskGroup(of: SingleFetchResult.self) { group in
+            for urlString in arguments.urls {
+                group.addTask {
+                    await self.fetchSingleURL(urlString)
+                }
+            }
+
+            var fetchResults: [SingleFetchResult] = []
+            for await result in group {
+                fetchResults.append(result)
+            }
+            return fetchResults
+        }
+
+        return FetchWithLinksOutput(results: results)
+    }
+
+    /// Fetches a single URL and returns the result.
+    private func fetchSingleURL(_ urlString: String) async -> SingleFetchResult {
+        guard let url = URL(string: urlString) else {
+            return SingleFetchResult(
                 success: false,
                 content: "",
                 links: [],
-                url: arguments.url,
+                url: urlString,
                 message: "Invalid URL format"
             )
         }
@@ -42,23 +61,21 @@ public struct FetchToolWithLinks: Tool, Sendable {
         do {
             let remark = try await Remark.fetch(from: url)
             let markdown = remark.markdown
+            let links = extractLinks(from: markdown, baseURL: urlString)
 
-            // Extract links from the markdown content
-            let links = extractLinks(from: markdown, baseURL: arguments.url)
-
-            return FetchWithLinksOutput(
+            return SingleFetchResult(
                 success: true,
                 content: markdown,
                 links: links,
-                url: arguments.url,
+                url: urlString,
                 message: "Successfully fetched page with \(links.count) links"
             )
         } catch {
-            return FetchWithLinksOutput(
+            return SingleFetchResult(
                 success: false,
                 content: "",
                 links: [],
-                url: arguments.url,
+                url: urlString,
                 message: "Failed to fetch: \(error.localizedDescription)"
             )
         }
@@ -119,8 +136,8 @@ public struct FetchToolWithLinks: Tool, Sendable {
 /// Input for fetch with links operation.
 @Generable
 public struct FetchWithLinksInput: Sendable {
-    @Guide(description: "The URL to fetch content from")
-    public let url: String
+    @Guide(description: "List of URLs to fetch content from (parallel fetch)")
+    public let urls: [String]
 }
 
 /// A link found within a page.
@@ -137,8 +154,8 @@ public struct PageLink: Sendable, Equatable {
     }
 }
 
-/// Output for fetch with links operation.
-public struct FetchWithLinksOutput: Sendable {
+/// Result for a single URL fetch.
+public struct SingleFetchResult: Sendable {
     /// Whether the fetch was successful.
     public let success: Bool
 
@@ -163,31 +180,52 @@ public struct FetchWithLinksOutput: Sendable {
     }
 }
 
+/// Output for fetch with links operation (supports multiple URLs).
+public struct FetchWithLinksOutput: Sendable {
+    /// Results for each URL fetched.
+    public let results: [SingleFetchResult]
+
+    /// Number of successful fetches.
+    public var successCount: Int {
+        results.filter { $0.success }.count
+    }
+
+    /// Number of failed fetches.
+    public var failedCount: Int {
+        results.filter { !$0.success }.count
+    }
+
+    public init(results: [SingleFetchResult]) {
+        self.results = results
+    }
+}
+
 extension FetchWithLinksOutput: CustomStringConvertible {
     public var description: String {
-        let status = success ? "Success" : "Failed"
-        var output = """
-        WebFetch [\(status)]
-        URL: \(url)
-        \(message)
-        """
+        var output = "WebFetch [Fetched \(successCount)/\(results.count) URLs]\n"
 
-        if success {
-            // Truncate content if too long
-            let maxContentLength = 2000
-            let truncatedContent = content.count > maxContentLength
-                ? String(content.prefix(maxContentLength)) + "\n...[truncated]"
-                : content
+        for result in results {
+            let status = result.success ? "✓" : "✗"
+            output += "\n--- \(status) \(result.url) ---\n"
+            output += "\(result.message)\n"
 
-            output += "\n\n## Content\n\(truncatedContent)"
+            if result.success {
+                // Truncate content if too long
+                let maxContentLength = 1500
+                let truncatedContent = result.content.count > maxContentLength
+                    ? String(result.content.prefix(maxContentLength)) + "\n...[truncated]"
+                    : result.content
 
-            if !links.isEmpty {
-                output += "\n\n## Links (\(links.count) found)"
-                for (index, link) in links.prefix(20).enumerated() {
-                    output += "\n\(index + 1). [\(link.text)](\(link.url))"
-                }
-                if links.count > 20 {
-                    output += "\n... and \(links.count - 20) more links"
+                output += "\n## Content\n\(truncatedContent)\n"
+
+                if !result.links.isEmpty {
+                    output += "\n## Links (\(result.links.count) found)\n"
+                    for (index, link) in result.links.prefix(10).enumerated() {
+                        output += "\(index + 1). [\(link.text)](\(link.url))\n"
+                    }
+                    if result.links.count > 10 {
+                        output += "... and \(result.links.count - 10) more links\n"
+                    }
                 }
             }
         }
