@@ -85,14 +85,6 @@ struct SidebarView: View {
 
             Divider()
 
-            // Keywords section when researching
-            if viewModel.isResearching && !viewModel.keywords.isEmpty {
-                KeywordsSidebarSection(
-                    keywords: viewModel.keywords,
-                    currentKeyword: viewModel.currentKeyword
-                )
-            }
-
             Spacer()
 
             // Stats Footer
@@ -104,60 +96,6 @@ struct SidebarView: View {
         #if os(macOS)
         .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 400)
         #endif
-    }
-}
-
-// MARK: - Keywords Sidebar Section
-
-struct KeywordsSidebarSection: View {
-    let keywords: [String]
-    let currentKeyword: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Keywords")
-                .font(.caption)
-                .fontWeight(.medium)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal)
-                .padding(.top, 8)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(keywords, id: \.self) { keyword in
-                        KeywordBadge(
-                            keyword: keyword,
-                            isActive: keyword == currentKeyword
-                        )
-                    }
-                }
-                .padding(.horizontal)
-            }
-            .padding(.bottom, 8)
-        }
-        .background(Color(.controlBackgroundColor).opacity(0.3))
-    }
-}
-
-struct KeywordBadge: View {
-    let keyword: String
-    let isActive: Bool
-
-    var body: some View {
-        HStack(spacing: 4) {
-            if isActive {
-                ProgressView()
-                    .scaleEffect(0.5)
-                    .frame(width: 10, height: 10)
-            }
-            Text(keyword)
-                .font(.caption2)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(isActive ? Color.blue.opacity(0.2) : Color.secondary.opacity(0.1))
-        .foregroundStyle(isActive ? .blue : .secondary)
-        .clipShape(Capsule())
     }
 }
 
@@ -176,27 +114,8 @@ struct StatsFooter: View {
                     label: "Visited",
                     color: .blue
                 )
-                StatItem(
-                    icon: "checkmark.circle",
-                    value: "\(viewModel.relevantPages)",
-                    label: "Relevant",
-                    color: .green
-                )
-                if viewModel.isResearching {
-                    StatItem(
-                        icon: "arrow.trianglehead.2.clockwise",
-                        value: "\(viewModel.processingURLs.count)",
-                        label: "Active",
-                        color: .orange
-                    )
-                } else if let result = viewModel.result {
-                    StatItem(
-                        icon: "key",
-                        value: "\(result.keywordsUsed.count)",
-                        label: "Keywords",
-                        color: .purple
-                    )
-                }
+
+                PhaseIndicator(phase: viewModel.currentPhase)
             }
             .padding()
         }
@@ -236,12 +155,7 @@ struct DetailView: View {
     var body: some View {
         Group {
             if let result = viewModel.result {
-                ResultView(
-                    result: result,
-                    sentPrompts: viewModel.sentPrompts,
-                    activityLog: viewModel.activityLog,
-                    explorationItems: viewModel.explorationItems
-                )
+                ResultView(result: result)
             } else if let error = viewModel.error {
                 ErrorView(error: error, onRetry: {
                     Task {

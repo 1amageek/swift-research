@@ -430,7 +430,19 @@ struct PromptTendencyTests {
     }
 }
 
-// MARK: - Response Types
+// MARK: - Response Types (test-local)
+
+@Generable
+struct ObjectiveAnalysisResponse: Sendable {
+    @Guide(description: "Keywords for search (English, search engine optimized)")
+    let keywords: [String]
+
+    @Guide(description: "Specific questions to answer")
+    let questions: [String]
+
+    @Guide(description: "Criteria for determining information sufficiency")
+    let successCriteria: [String]
+}
 
 @Generable
 struct FinalResponseResponse: Sendable {

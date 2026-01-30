@@ -70,7 +70,7 @@ func validateOllamaModel(baseURL: URL, modelName: String) async throws {
 struct ResearchCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "research",
-        abstract: "LLM-powered objective-driven research assistant",
+        abstract: "LLM-powered autonomous research assistant",
         version: "1.0.0"
     )
 
@@ -115,9 +115,6 @@ struct ResearchCLI: AsyncParsableCommand {
     @Flag(name: .long, help: "Test fetch step only")
     var testFetch: Bool = false
 
-    @Flag(name: .long, help: "Use AgentSession-based research (experimental)")
-    var agent: Bool = false
-
     // MARK: - Run
 
     func run() async throws {
@@ -125,8 +122,6 @@ struct ResearchCLI: AsyncParsableCommand {
             try await runTestSearch()
         } else if testFetch {
             try await runTestFetch()
-        } else if agent {
-            try await runAgentResearch()
         } else {
             try await runResearch()
         }
@@ -135,78 +130,6 @@ struct ResearchCLI: AsyncParsableCommand {
     // MARK: - Research
 
     private func runResearch() async throws {
-        let finalQuery: String
-        if let q = query, !q.isEmpty {
-            finalQuery = q
-        } else {
-            print("Enter research query:")
-            print("> ", terminator: "")
-            guard let input = readLine(), !input.isEmpty else {
-                print("No query provided")
-                throw ExitCode.failure
-            }
-            finalQuery = input
-        }
-
-        #if USE_OTHER_MODELS
-        if !claude {
-            guard let baseURLParsed = URL(string: baseURL) else {
-                print("Invalid base URL: \(baseURL)")
-                throw ExitCode.failure
-            }
-            do {
-                try await validateOllamaModel(baseURL: baseURLParsed, modelName: model)
-            } catch let error as OllamaError {
-                print(error.localizedDescription)
-                throw ExitCode.failure
-            } catch {
-                print("Skipping model validation: \(error.localizedDescription)")
-            }
-        }
-        #endif
-
-        let languageModel = try createModel()
-
-        #if USE_OTHER_MODELS
-        let researchConfig = ResearchConfiguration(llmSupportsConcurrency: true)
-        #else
-        let researchConfig = ResearchConfiguration(llmSupportsConcurrency: false)
-        #endif
-
-        let configuration = CrawlerConfiguration(researchConfiguration: researchConfig)
-
-        let logFileURL: URL?
-        if let logPath = log {
-            logFileURL = URL(fileURLWithPath: logPath)
-            try? "".write(to: logFileURL!, atomically: true, encoding: .utf8)
-            print("Logging to: \(logPath)")
-        } else {
-            logFileURL = nil
-        }
-
-        let orchestrator = SearchOrchestratorStep(
-            model: languageModel,
-            configuration: configuration,
-            verbose: verbose || (log != nil),
-            logFileURL: logFileURL
-        )
-
-        let searchQuery = SearchQuery(objective: finalQuery, maxVisitedURLs: limit)
-
-        let result: AggregatedResult
-        do {
-            result = try await orchestrator.run(searchQuery)
-        } catch {
-            print("Crawl failed: \(error.localizedDescription)")
-            throw ExitCode.failure
-        }
-
-        outputResult(result)
-    }
-
-    // MARK: - Agent Research
-
-    private func runAgentResearch() async throws {
         let finalQuery: String
         if let q = query, !q.isEmpty {
             finalQuery = q
@@ -249,7 +172,7 @@ struct ResearchCLI: AsyncParsableCommand {
             configuration: configuration
         )
 
-        print("Starting AgentSession-based research...")
+        print("Starting research...")
         #if USE_OTHER_MODELS
         if claude {
             print("Model: Claude Sonnet 4.5 (claude-sonnet-4-5-20250929)")
@@ -265,17 +188,28 @@ struct ResearchCLI: AsyncParsableCommand {
 
         do {
             let result = try await researchAgent.research(finalQuery)
-            outputAgentResult(result)
+            outputResult(result)
         } catch {
             print("Research failed: \(error.localizedDescription)")
             throw ExitCode.failure
         }
     }
 
-    private func outputAgentResult(_ result: ResearchAgent.Result) {
+    // MARK: - Output
+
+    private func outputResult(_ result: ResearchAgent.Result) {
+        switch format {
+        case .text:
+            outputTextResult(result)
+        case .json:
+            outputJSONResult(result)
+        }
+    }
+
+    private func outputTextResult(_ result: ResearchAgent.Result) {
         print("")
         print("========================================")
-        print("Research Results (Agent Mode)")
+        print("Research Results")
         print("========================================")
         print("")
         print("Duration: \(formatDuration(result.duration))")
@@ -292,6 +226,30 @@ struct ResearchCLI: AsyncParsableCommand {
         print("---")
         print("")
         print("========================================")
+    }
+
+    private func outputJSONResult(_ result: ResearchAgent.Result) {
+        struct JSONOutput: Codable {
+            let objective: String
+            let answer: String
+            let visitedURLs: [String]
+            let durationSeconds: Double
+        }
+
+        let output = JSONOutput(
+            objective: result.objective,
+            answer: result.answer,
+            visitedURLs: result.visitedURLs,
+            durationSeconds: Double(result.duration.components.seconds)
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+
+        if let data = try? encoder.encode(output),
+           let json = String(data: data, encoding: .utf8) {
+            print(json)
+        }
     }
 
     // MARK: - Test Search
@@ -384,143 +342,6 @@ struct ResearchCLI: AsyncParsableCommand {
         #else
         return SystemLanguageModel()
         #endif
-    }
-
-    private func outputResult(_ result: AggregatedResult) {
-        switch format {
-        case .text:
-            outputTextResult(result)
-        case .json:
-            outputJSONResult(result)
-        }
-    }
-
-    private func outputTextResult(_ result: AggregatedResult) {
-        print("")
-        print("========================================")
-        print("Research Results")
-        print("========================================")
-        print("")
-        print("Objective: \(result.objective)")
-        print("Keywords: \(result.keywordsUsed.joined(separator: ", "))")
-        print("Questions: \(result.questions.joined(separator: " / "))")
-        print("Criteria: \(result.successCriteria.joined(separator: " / "))")
-        print("")
-
-        print("Statistics:")
-        print("  Pages visited: \(result.statistics.totalPagesVisited)")
-        print("  Relevant pages: \(result.statistics.relevantPagesFound)")
-        print("  Keywords used: \(result.statistics.keywordsUsed)")
-        print("  Duration: \(formatDuration(result.statistics.duration))")
-        print("")
-
-        if !result.responseMarkdown.isEmpty {
-            print("Response:")
-            print("---")
-            print(result.responseMarkdown)
-            print("")
-        }
-
-        let topContents = result.reviewedContents.prefix(5)
-        if !topContents.isEmpty {
-            print("Sources:")
-            print("---")
-            for content in topContents {
-                print("\(content.title ?? content.url.absoluteString)")
-                print("  \(content.extractedInfo.prefix(150))...")
-            }
-        }
-
-        print("")
-        print("========================================")
-    }
-
-    private func outputJSONResult(_ result: AggregatedResult) {
-        struct JSONOutput: Codable {
-            let objective: String
-            let questions: [String]
-            let successCriteria: [String]
-            let keywordsUsed: [String]
-            let responseMarkdown: String
-            let statistics: Stats
-            let reviewedContents: [ReviewedContentOutput]
-
-            struct Stats: Codable {
-                let totalPagesVisited: Int
-                let relevantPagesFound: Int
-                let keywordsUsed: Int
-                let durationSeconds: Double
-            }
-
-            struct ReviewedContentOutput: Codable {
-                let url: String
-                let title: String?
-                let extractedInfo: String
-            }
-        }
-
-        let output = JSONOutput(
-            objective: result.objective,
-            questions: result.questions,
-            successCriteria: result.successCriteria,
-            keywordsUsed: result.keywordsUsed,
-            responseMarkdown: result.responseMarkdown,
-            statistics: JSONOutput.Stats(
-                totalPagesVisited: result.statistics.totalPagesVisited,
-                relevantPagesFound: result.statistics.relevantPagesFound,
-                keywordsUsed: result.statistics.keywordsUsed,
-                durationSeconds: Double(result.statistics.duration.components.seconds)
-            ),
-            reviewedContents: result.reviewedContents.map { content in
-                JSONOutput.ReviewedContentOutput(
-                    url: content.url.absoluteString,
-                    title: content.title,
-                    extractedInfo: content.extractedInfo
-                )
-            }
-        )
-
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-
-        if let data = try? encoder.encode(output),
-           let json = String(data: data, encoding: .utf8) {
-            print(json)
-        }
-    }
-
-    static func systemInstructions() -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd HH:mm"
-        formatter.timeZone = TimeZone.current
-        let currentDateTime = formatter.string(from: Date())
-        let timeZone = TimeZone.current.identifier
-
-        return """
-        あなたは情報収集エージェントです。ユーザーの質問に根拠を持って回答するための情報を収集・分析します。
-
-        # 現在の日時
-        \(currentDateTime) (\(timeZone))
-        IMPORTANT: 「現在」「最新」などの時間表現はこの日時を基準に解釈すること
-
-        # 出力規則
-        - 常に有効なJSONオブジェクトで応答する（'{'で開始）
-        - 配列フィールドはJSON配列として出力（例: "items": ["a", "b"]）
-        - 文字列として配列を出力しない（例: "items": "a, b" は不可）
-        - Markdownコードフェンスは含めない
-        IMPORTANT: メタ的な説明（「JSONで提供しました」「以下が回答です」等）は出力しない
-
-        # 行動規則
-        - 事実に基づいて回答する
-        - 不明な場合は推測せず、その旨を明記する
-        - 質問の背景・理由・含意も考慮する
-
-        # 分析の観点
-        情報を収集・分析する際は以下の観点を考慮:
-        - 事実: 具体的なデータ（数値、日付、名称）
-        - 背景: その事実の理由や原因
-        - 含意: それが意味すること、導かれる結論
-        """
     }
 }
 

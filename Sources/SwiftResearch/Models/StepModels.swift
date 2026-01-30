@@ -1,105 +1,8 @@
 import Foundation
 
-// MARK: - Phase 1: Objective Analysis Result
-
-/// Internal result of objective analysis (non-Generable struct).
-///
-/// Reference: AMD Framework (arXiv:2502.08557) - Socratic questioning decomposition
-public struct ObjectiveAnalysis: Sendable {
-    /// Search keywords extracted from the objective.
-    public let keywords: [String]
-    /// Socratic questions (clarification, assumption testing, implication exploration).
-    public let questions: [String]
-    /// Criteria for determining sufficient information.
-    public let successCriteria: [String]
-
-    public init(
-        keywords: [String],
-        questions: [String],
-        successCriteria: [String]
-    ) {
-        self.keywords = keywords
-        self.questions = questions
-        self.successCriteria = successCriteria
-    }
-
-    /// Converts from ObjectiveAnalysisResponse.
-    public init(from response: ObjectiveAnalysisResponse) {
-        self.keywords = response.keywords
-        self.questions = response.questions
-        self.successCriteria = response.successCriteria
-    }
-
-    /// Creates a fallback analysis when LLM fails.
-    public static func fallback(objective: String) -> ObjectiveAnalysis {
-        ObjectiveAnalysis(
-            keywords: [objective],
-            questions: [objective],
-            successCriteria: ["Find relevant information"]
-        )
-    }
-}
-
-// MARK: - Phase 3: Content Review Result
-
-/// Internal result of content review (non-Generable struct).
-///
-/// Focuses on information extraction. Question verification is performed in Phase 4.
-public struct ContentReview: Sendable {
-    /// Whether the content is relevant to the objective.
-    public let isRelevant: Bool
-    /// Extracted relevant information.
-    public let extractedInfo: String
-    /// Whether deep crawling should be performed.
-    public let shouldDeepCrawl: Bool
-    /// Priority links for deep crawling.
-    public let priorityLinks: [PriorityLink]
-    /// Line ranges where relevant information is located.
-    public let relevantRanges: [Range<Int>]
-
-    public init(
-        isRelevant: Bool,
-        extractedInfo: String,
-        shouldDeepCrawl: Bool,
-        priorityLinks: [PriorityLink],
-        relevantRanges: [Range<Int>] = []
-    ) {
-        self.isRelevant = isRelevant
-        self.extractedInfo = extractedInfo
-        self.shouldDeepCrawl = shouldDeepCrawl
-        self.priorityLinks = priorityLinks
-        self.relevantRanges = relevantRanges
-    }
-
-    /// Converts from ContentReviewResponse.
-    public init(from response: ContentReviewResponse) {
-        self.isRelevant = response.isRelevant
-        self.extractedInfo = response.extractedInfo
-        self.shouldDeepCrawl = response.shouldDeepCrawl
-        self.priorityLinks = response.priorityLinks
-        self.relevantRanges = response.relevantRanges.compactMap { range in
-            guard range.start >= 0 && range.end > range.start else { return nil }
-            return range.start..<range.end
-        }
-    }
-
-    /// Creates a fallback as irrelevant content.
-    public static func irrelevant() -> ContentReview {
-        ContentReview(
-            isRelevant: false,
-            extractedInfo: "",
-            shouldDeepCrawl: false,
-            priorityLinks: [],
-            relevantRanges: []
-        )
-    }
-}
-
 // MARK: - ReviewedContent
 
-/// Reviewed content output from Phase 3.
-///
-/// Contains only extraction results. Question verification is performed in Phase 4.
+/// Reviewed content from a web page.
 public struct ReviewedContent: Sendable {
     /// The URL of the reviewed content.
     public let url: URL
@@ -112,7 +15,6 @@ public struct ReviewedContent: Sendable {
     /// Line ranges where relevant information is located.
     public let relevantRanges: [Range<Int>]
     /// Actual text excerpts extracted from the relevant ranges.
-    /// These are the text chunks used as context in Phase 5.
     public let excerpts: [String]
 
     public init(
@@ -132,93 +34,21 @@ public struct ReviewedContent: Sendable {
     }
 }
 
-// MARK: - Internal Sufficiency Result
+// MARK: - AggregatedResult
 
-/// Internal result of sufficiency check (non-Generable struct).
-public struct SufficiencyResult: Sendable {
-    /// Whether sufficient information has been collected.
-    public let isSufficient: Bool
-    /// Whether further information gathering is futile.
-    public let shouldGiveUp: Bool
-    /// Additional keywords to search if insufficient.
-    public let additionalKeywords: [String]
-    /// Reason for the decision in Markdown format.
-    public let reasonMarkdown: String
-    /// Current success criteria (may be updated from original).
-    public let successCriteria: [String]
-
-    public init(
-        isSufficient: Bool,
-        shouldGiveUp: Bool = false,
-        additionalKeywords: [String] = [],
-        reasonMarkdown: String = "",
-        successCriteria: [String] = []
-    ) {
-        self.isSufficient = isSufficient
-        self.shouldGiveUp = shouldGiveUp
-        self.additionalKeywords = additionalKeywords
-        self.reasonMarkdown = reasonMarkdown
-        self.successCriteria = successCriteria
-    }
-
-    /// Converts from SufficiencyCheckResponse.
-    public init(from response: SufficiencyCheckResponse) {
-        self.isSufficient = response.isSufficient
-        self.shouldGiveUp = response.shouldGiveUp
-        self.additionalKeywords = response.additionalKeywords
-        self.reasonMarkdown = response.reasonMarkdown
-        self.successCriteria = response.successCriteria
-    }
-
-    /// Creates an insufficient result.
-    public static func insufficient(reason: String) -> SufficiencyResult {
-        SufficiencyResult(
-            isSufficient: false,
-            shouldGiveUp: false,
-            additionalKeywords: [],
-            reasonMarkdown: reason,
-            successCriteria: []
-        )
-    }
-
-    /// Creates a give-up result.
-    public static func giveUp(reason: String) -> SufficiencyResult {
-        SufficiencyResult(
-            isSufficient: false,
-            shouldGiveUp: true,
-            additionalKeywords: [],
-            reasonMarkdown: reason,
-            successCriteria: []
-        )
-    }
-}
-
-// MARK: - SearchOrchestratorStep Models
-
-/// Input for the search orchestrator.
-public struct SearchQuery: Sendable {
-    /// The research objective.
-    public let objective: String
-    /// Maximum number of URLs to visit (safety limit).
-    public let maxVisitedURLs: Int
-
-    public init(objective: String, maxVisitedURLs: Int = 100) {
-        self.objective = objective
-        self.maxVisitedURLs = maxVisitedURLs
-    }
-}
-
-/// Output from the search orchestrator (aggregated result).
+/// Aggregated research result.
+///
+/// Used by the Evaluation framework to assess research quality.
 public struct AggregatedResult: Sendable {
     /// The original research objective.
     public let objective: String
-    /// Socratic questions from Phase 1.
+    /// Questions generated during research.
     public let questions: [String]
-    /// Success criteria from Phase 1.
+    /// Success criteria for the research.
     public let successCriteria: [String]
-    /// Reviewed contents from Phase 3.
+    /// Reviewed contents from research.
     public let reviewedContents: [ReviewedContent]
-    /// Final response from Phase 5.
+    /// Final response in Markdown format.
     public let responseMarkdown: String
     /// Keywords used during search.
     public let keywordsUsed: [String]
@@ -244,7 +74,9 @@ public struct AggregatedResult: Sendable {
     }
 }
 
-/// Aggregated statistics from the research session.
+// MARK: - AggregatedStatistics
+
+/// Aggregated statistics from a research session.
 public struct AggregatedStatistics: Sendable {
     /// Total number of pages visited.
     public let totalPagesVisited: Int

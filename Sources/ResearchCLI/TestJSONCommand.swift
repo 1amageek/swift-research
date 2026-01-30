@@ -123,7 +123,39 @@ extension ResearchCLI {
             }
         }
 
-        static var systemInstruction: String { ResearchCLI.systemInstructions() }
+        static var systemInstruction: String {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd HH:mm"
+            formatter.timeZone = TimeZone.current
+            let currentDateTime = formatter.string(from: Date())
+            let timeZone = TimeZone.current.identifier
+
+            return """
+            あなたは情報収集エージェントです。ユーザーの質問に根拠を持って回答するための情報を収集・分析します。
+
+            # 現在の日時
+            \(currentDateTime) (\(timeZone))
+            IMPORTANT: 「現在」「最新」などの時間表現はこの日時を基準に解釈すること
+
+            # 出力規則
+            - 常に有効なJSONオブジェクトで応答する（'{'で開始）
+            - 配列フィールドはJSON配列として出力（例: "items": ["a", "b"]）
+            - 文字列として配列を出力しない（例: "items": "a, b" は不可）
+            - Markdownコードフェンスは含めない
+            IMPORTANT: メタ的な説明（「JSONで提供しました」「以下が回答です」等）は出力しない
+
+            # 行動規則
+            - 事実に基づいて回答する
+            - 不明な場合は推測せず、その旨を明記する
+            - 質問の背景・理由・含意も考慮する
+
+            # 分析の観点
+            情報を収集・分析する際は以下の観点を考慮:
+            - 事実: 具体的なデータ（数値、日付、名称）
+            - 背景: その事実の理由や原因
+            - 含意: それが意味すること、導かれる結論
+            """
+        }
 
         func testDimensionGeneration(model: OllamaLanguageModel, iteration: Int) async -> TestResult {
             print("\n[Iteration \(iteration)]")

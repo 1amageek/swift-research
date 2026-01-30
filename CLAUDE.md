@@ -9,18 +9,19 @@ SwiftResearch/
 ├── Sources/SwiftResearch/
 │   ├── Agent/                            # Agenticアーキテクチャ
 │   │   ├── ResearchAgent.swift           # メインリサーチエージェント
+│   │   ├── ResearchResult+Evaluation.swift # 評価ブリッジ
 │   │   └── Tools/                        # AgentSession用ツール
 │   │       ├── WebSearchTool.swift
 │   │       ├── FetchToolWithLinks.swift
 │   │       └── EvaluateSufficiencyTool.swift
-│   ├── Steps/                            # 処理ステップ（ワークフロー用）
-│   │   ├── SearchOrchestratorStep.swift  # ワークフローオーケストレーター
-│   │   ├── SearchStep.swift              # 検索実行Step
-│   │   └── ...
+│   ├── Steps/                            # 処理ステップ
+│   │   └── SearchStep.swift              # 検索実行Step（評価用）
 │   ├── Models/                           # データモデル
-│   │   ├── CrawlContext.swift            # 並列クロール用共有状態
-│   │   ├── CrawlProgress.swift           # 進捗イベント
-│   │   └── ...
+│   │   ├── StepModels.swift              # ReviewedContent, AggregatedResult等
+│   │   ├── CrawlerConfiguration.swift    # 検索エンジン設定
+│   │   ├── ResearchConfiguration.swift   # リサーチ設定
+│   │   ├── CrawlerError.swift            # エラー定義
+│   │   └── ModelContext.swift            # モデルコンテキスト
 │   └── Evaluation/                       # 評価フレームワーク
 │       ├── QualityEvaluation/            # 品質評価
 │       ├── FactChecking/                 # ファクトチェック
@@ -32,18 +33,9 @@ SwiftResearch/
 
 ## アーキテクチャ
 
-### 2つのアプローチ
+### ResearchAgent
 
-本プロジェクトは2つのアーキテクチャをサポート:
-
-| アプローチ | 実装 | 特徴 |
-|-----------|------|------|
-| **Agentic** | `ResearchAgent` | LLMが自律的にTool呼び出しを判断 |
-| **Workflow** | `SearchOrchestratorStep` | 固定フェーズを順次実行 |
-
-**推奨:** 新規開発は**Agentic**を使用。ワークフローは柔軟性に限界がある。
-
-### ResearchAgent（Agentic）
+LLMが自律的にToolを呼び出してリサーチを実行するAgenticアーキテクチャ。
 
 ```swift
 let agent = ResearchAgent(
@@ -70,51 +62,7 @@ AgentSession(model, tools: [...])
 
 LLMがInstructionsに従い、適切なToolを自律的に呼び出す。
 
-### SearchOrchestratorStep（Workflow）
-
-固定フェーズを順次実行する従来のアプローチ。
-
-#### 処理フロー
-
-```
-SearchQuery(objective, maxURLs)
-         │
-         ▼
-┌─────────────────────────────────────────────────────────┐
-│  Phase 0: Initial Search                                │
-│  ユーザーのクエリで検索し、未知の対象について基本情報を取得 │
-└─────────────────────────────────────────────────────────┘
-         │ backgroundInfo
-         ▼
-┌─────────────────────────────────────────────────────────┐
-│  Phase 1: Objective Analysis                            │
-│  キーワード・問い・成功基準を生成                         │
-└─────────────────────────────────────────────────────────┘
-         │ ObjectiveAnalysis
-         ▼
-┌─────────────────────────────────────────────────────────┐
-│  Phase 2-4 Loop (キーワードごとに繰り返し)                │
-│                                                         │
-│  Phase 2: Search     → キーワードでWeb検索              │
-│  Phase 3: Review     → 並列でページ取得・情報抽出        │
-│  Phase 4: Sufficiency → 成功基準の達成度を評価           │
-│           ↓                                             │
-│  十分 → ループ終了 / 不十分 → 追加キーワードで継続        │
-└─────────────────────────────────────────────────────────┘
-         │ ReviewedContent[]
-         ▼
-┌─────────────────────────────────────────────────────────┐
-│  Phase 5: Response Building                             │
-│  収集情報から最終回答をMarkdownで生成                    │
-└─────────────────────────────────────────────────────────┘
-         │
-         ▼
-    AggregatedResult
-```
-
 ### コア設計
-
-**Agentic（推奨）:**
 
 | コンポーネント | 責務 |
 |---------------|------|
@@ -124,36 +72,18 @@ SearchQuery(objective, maxURLs)
 | `FetchToolWithLinks` | ページ取得とリンク抽出 |
 | `EvaluateSufficiencyTool` | 情報十分性を評価（内部で独自Session使用） |
 
-**Workflow:**
-
-| コンポーネント | 責務 |
-|---------------|------|
-| `SearchOrchestratorStep` | 全Phaseを統括するStep |
-| `SearchStep` | キーワード検索を実行するStep |
-| `CrawlContext` | 並列ワーカー間の共有状態（Mutex使用） |
-| `CrawlProgress` | UI向け進捗イベントストリーム |
-
-### 並列処理
-
-Phase 3では複数ワーカーが並列でページを処理:
+### ResearchAgent.Result
 
 ```swift
-// CrawlContext: Mutex<State>パターンで状態を保護
-public final class CrawlContext: Sendable {
-    private let state: Mutex<State>
-
-    public func dequeueURL() -> URL? {
-        state.withLock { state in
-            guard !state.isSufficient,
-                  state.totalProcessed + state.inProgress.count < maxURLs,
-                  !state.urlQueue.isEmpty else { return nil }
-            let url = state.urlQueue.removeFirst()
-            state.inProgress.insert(url)
-            return url
-        }
-    }
+public struct Result: Sendable {
+    public let objective: String
+    public let answer: String
+    public let visitedURLs: [String]
+    public let duration: Duration
 }
 ```
+
+評価フレームワークとの互換性のため、`toAggregatedResult()` メソッドで `AggregatedResult` に変換可能。
 
 ## SwiftAgent 基本概念
 
@@ -367,6 +297,7 @@ research "調査クエリ"
 
 | オプション | デフォルト | 説明 |
 |-----------|-----------|------|
+| `--claude` | false | Claude APIを使用 |
 | `--model` | lfm2.5-thinking | Ollamaモデル名 |
 | `--base-url` | http://127.0.0.1:11434 | OllamaサーバーURL |
 | `--timeout` | 300.0 | リクエストタイムアウト（秒） |

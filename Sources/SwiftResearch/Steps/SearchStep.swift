@@ -118,7 +118,7 @@ public struct SearchStep: Step, Sendable {
                 return true
             }
 
-        printFlush("   Found \(urls.count) URLs")
+        print("   Found \(urls.count) URLs")
 
         if urls.isEmpty {
             throw CrawlerError.noURLsFound
