@@ -290,7 +290,7 @@ struct ResearchCLI: AsyncParsableCommand {
         print("")
 
         do {
-            let remark = try await Remark.fetch(from: parsedURL, timeout: 15)
+            let remark = try await Remark.fetch(from: parsedURL, method: .interactive, timeout: 15)
             let links = try remark.extractLinks()
 
             print("Title: \(remark.title)")

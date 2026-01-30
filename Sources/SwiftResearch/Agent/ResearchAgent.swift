@@ -98,7 +98,7 @@ public final class ResearchAgent: Sendable {
         let sufficiencyTool = EvaluateSufficiencyTool(model: model)
 
         // Create the agent session
-        let session = AgentSession(
+        let languageModelSession = LanguageModelSession(
             model: model,
             tools: [searchTool, fetchTool, sufficiencyTool]
         ) {
@@ -107,6 +107,7 @@ public final class ResearchAgent: Sendable {
                 blockedDomains: configuration.blockedDomains
             ))
         }
+        let session = AgentSession(languageModelSession: languageModelSession)
 
         // Send the research query
         let prompt = """

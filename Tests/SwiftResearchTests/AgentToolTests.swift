@@ -86,7 +86,7 @@ struct AgentToolTests {
         print("Model: \(Self.modelName)")
 
         // Create AgentSession with tool
-        let session = AgentSession(
+        let languageModelSession = LanguageModelSession(
             model: model,
             tools: [calculator]
         ) {
@@ -96,6 +96,7 @@ struct AgentToolTests {
             Do not calculate in your head - always use the tool.
             """)
         }
+        let session = AgentSession(languageModelSession: languageModelSession)
 
         // Send a request that requires tool use
         let prompt = "What is 15 + 27? Use the calculator tool to find the answer."
