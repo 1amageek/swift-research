@@ -265,11 +265,11 @@ public struct SearchQuery {
 
 ## 実装済み: domainContext の追加
 
-### 1. CrawlerConfiguration の拡張 (@Contextable)
+### 1. SearchConfiguration の拡張 (@Contextable)
 
 ```swift
 @Contextable
-public struct CrawlerConfiguration: Sendable {
+public struct SearchConfiguration: Sendable {
     // 既存フィールド...
 
     /// Domain context for query disambiguation.
@@ -282,7 +282,7 @@ public struct CrawlerConfiguration: Sendable {
 ```swift
 public struct ObjectiveAnalysisStep: Step, Sendable {
     @Session var session: LanguageModelSession
-    @Context var config: CrawlerConfiguration  // 暗黙的に伝播
+    @Context var config: SearchConfiguration  // 暗黙的に伝播
 
     func run(_ input: Input) async throws -> Output {
         let domainSection = config.domainContext.map { context in
@@ -313,8 +313,8 @@ public struct ObjectiveAnalysisStep: Step, Sendable {
 // Personaからドメインコンテキストを取得
 let persona = Persona(domain: .technology, ...)
 
-// CrawlerConfigurationに設定
-let crawlerConfig = CrawlerConfiguration(
+// SearchConfigurationに設定
+let searchConfig = SearchConfiguration(
     researchConfiguration: researchConfig,
     domainContext: persona.domain.domainDescription
     // → "Software development, AI, hardware, cybersecurity"
@@ -323,7 +323,7 @@ let crawlerConfig = CrawlerConfiguration(
 // SearchOrchestratorStepに渡す
 let orchestrator = SearchOrchestratorStep(
     session: session,
-    configuration: crawlerConfig
+    configuration: searchConfig
 )
 
 // 全Stepで自動的にdomainContextが利用可能
@@ -332,7 +332,7 @@ let orchestrator = SearchOrchestratorStep(
 ### 5. 改善後のフロー
 
 ```
-CrawlerConfiguration
+SearchConfiguration
 └─ domainContext: "Software development, AI, ..." ← Persona.domain から
          │
          ▼ (@Context で暗黙的に伝播)

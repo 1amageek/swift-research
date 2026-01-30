@@ -26,8 +26,8 @@ public struct KeywordSearchInput: Sendable {
 /// // Explicit configuration
 /// let step = SearchStep(searchEngine: .google, blockedDomains: ["example.com"])
 ///
-/// // Context-based (uses CrawlerConfigContext)
-/// try await withContext(CrawlerConfigContext.self, value: config) {
+/// // Context-based (uses SearchConfiguration)
+/// try await withContext(SearchConfiguration.self, value: config) {
 ///     try await SearchStep().run(input)
 /// }
 /// ```
@@ -35,7 +35,7 @@ public struct SearchStep: Step, Sendable {
     public typealias Input = KeywordSearchInput
     public typealias Output = [URL]
 
-    @Context private var contextConfig: CrawlerConfiguration
+    @Context private var contextConfig: SearchConfiguration
 
     private let explicitSearchEngine: SearchEngine?
     private let explicitBlockedDomains: Set<String>?
@@ -55,7 +55,7 @@ public struct SearchStep: Step, Sendable {
 
     /// Creates a new search step that uses `@Context` for configuration.
     ///
-    /// Call within `withContext(CrawlerConfigContext.self, value:)` block.
+    /// Call within `withContext(SearchConfiguration.self, value:)` block.
     public init() {
         self.explicitSearchEngine = nil
         self.explicitBlockedDomains = nil
@@ -73,7 +73,7 @@ public struct SearchStep: Step, Sendable {
 
     public func run(_ input: KeywordSearchInput) async throws -> [URL] {
         guard let searchURL = searchEngine.searchURL(for: input.keyword) else {
-            throw CrawlerError.invalidURL(input.keyword)
+            throw SearchError.invalidURL(input.keyword)
         }
 
         let remark = try await Remark.fetch(from: searchURL, timeout: 15)
@@ -121,7 +121,7 @@ public struct SearchStep: Step, Sendable {
         print("   Found \(urls.count) URLs")
 
         if urls.isEmpty {
-            throw CrawlerError.noURLsFound
+            throw SearchError.noURLsFound
         }
 
         return Array(urls)
@@ -135,7 +135,7 @@ extension SearchStep {
     ///
     /// - Parameter configuration: The crawler configuration.
     /// - Returns: A configured search step.
-    public static func from(configuration: CrawlerConfiguration) -> SearchStep {
+    public static func from(configuration: SearchConfiguration) -> SearchStep {
         SearchStep(
             searchEngine: configuration.searchEngine,
             blockedDomains: configuration.blockedDomains

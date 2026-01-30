@@ -59,7 +59,11 @@ let package = Package(
         ),
         .testTarget(
             name: "SwiftResearchTests",
-            dependencies: ["SwiftResearch"] + (useOtherModels ? [
+            dependencies: [
+                "SwiftResearch",
+                .product(name: "SwiftAgent", package: "SwiftAgent"),
+                .product(name: "RemarkKit", package: "Remark"),
+            ] + (useOtherModels ? [
                 .product(name: "OpenFoundationModelsOllama", package: "OpenFoundationModels-Ollama"),
                 .product(name: "OpenFoundationModelsClaude", package: "OpenFoundationModels-Claude"),
             ] : []),

@@ -1,5 +1,6 @@
 import Foundation
 import SwiftAgent
+@testable import SwiftResearch
 
 // MARK: - Input
 
@@ -61,7 +62,7 @@ public struct FactCheckOrchestratorStep: Step, Sendable {
     public typealias Output = FactCheckResult
 
     @Context private var modelContext: ModelContext
-    @Context private var crawlerConfig: CrawlerConfiguration
+    @Context private var crawlerConfig: SearchConfiguration
 
     /// Creates a new fact check orchestrator step.
     public init() {}

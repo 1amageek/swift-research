@@ -1,6 +1,7 @@
 import Foundation
 import SwiftAgent
 import RemarkKit
+@testable import SwiftResearch
 
 // MARK: - Input
 
@@ -51,7 +52,7 @@ public struct EvidenceRetrievalStep: Step, Sendable {
     public typealias Output = [Evidence]
 
     @Context private var modelContext: ModelContext
-    @Context private var crawlerConfig: CrawlerConfiguration
+    @Context private var crawlerConfig: SearchConfiguration
 
     /// Creates a new evidence retrieval step.
     public init() {}

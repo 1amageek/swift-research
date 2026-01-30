@@ -1,10 +1,10 @@
 import Foundation
 
-// MARK: - CrawlerError
+// MARK: - SearchError
 
-/// Errors that can occur during crawling operations.
+/// Errors that can occur during search operations.
 ///
-/// This enum covers all error cases that may arise during the research process,
+/// This enum covers all error cases that may arise during the search process,
 /// including network failures, configuration issues, and operational timeouts.
 ///
 /// ## Topics
@@ -24,7 +24,7 @@ import Foundation
 ///
 /// ### Operational Errors
 /// - ``cancelled``
-public enum CrawlerError: Error, Sendable {
+public enum SearchError: Error, Sendable {
     /// Search operation failed with the specified message.
     case searchFailed(String)
 
@@ -52,7 +52,7 @@ public enum CrawlerError: Error, Sendable {
 
 // MARK: - LocalizedError
 
-extension CrawlerError: LocalizedError {
+extension SearchError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .searchFailed(let message):

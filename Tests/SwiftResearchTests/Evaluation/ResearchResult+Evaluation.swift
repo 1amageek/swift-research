@@ -1,4 +1,5 @@
 import Foundation
+@testable import SwiftResearch
 
 extension ResearchAgent.Result {
     /// Converts to `AggregatedResult` for compatibility with the Evaluation framework.

@@ -135,7 +135,7 @@ private func createStepSession() -> LanguageModelSession {
 ```swift
 // Phase 1
 let analysis = try await SessionContext.$current.withValue(createStepSession()) {
-    try await CrawlerConfigurationContext.withValue(configuration) {
+    try await SearchConfigurationContext.withValue(configuration) {
         try await ObjectiveAnalysisStep(progressContinuation: progressContinuation)
             .run(analysisInput)
     }

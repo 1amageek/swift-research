@@ -7,27 +7,21 @@ LLMを活用した自律的Webリサーチライブラリ。ユーザーの質�
 ```
 SwiftResearch/
 ├── Sources/SwiftResearch/
-│   ├── Agent/                            # Agenticアーキテクチャ
-│   │   ├── ResearchAgent.swift           # メインリサーチエージェント
-│   │   ├── ResearchResult+Evaluation.swift # 評価ブリッジ
-│   │   └── Tools/                        # AgentSession用ツール
-│   │       ├── WebSearchTool.swift
-│   │       ├── FetchToolWithLinks.swift
-│   │       └── EvaluateSufficiencyTool.swift
-│   ├── Steps/                            # 処理ステップ
-│   │   └── SearchStep.swift              # 検索実行Step（評価用）
-│   ├── Models/                           # データモデル
-│   │   ├── StepModels.swift              # ReviewedContent, AggregatedResult等
-│   │   ├── CrawlerConfiguration.swift    # 検索エンジン設定
-│   │   ├── ResearchConfiguration.swift   # リサーチ設定
-│   │   ├── CrawlerError.swift            # エラー定義
-│   │   └── ModelContext.swift            # モデルコンテキスト
+│   ├── ResearchAgent.swift               # メインリサーチエージェント
+│   ├── SearchConfiguration.swift         # 検索エンジン設定
+│   ├── SearchError.swift                 # エラー定義
+│   ├── ResearchConfiguration.swift       # リサーチ設定
+│   ├── SearchStep.swift                  # 検索実行Step（評価用）
+│   └── Tools/                            # AgentSession用ツール
+│       ├── WebSearchTool.swift
+│       ├── FetchToolWithLinks.swift
+│       └── EvaluateSufficiencyTool.swift
+├── Sources/ResearchCLI/                  # CLIツール
+├── Tests/SwiftResearchTests/             # テストスイート
 │   └── Evaluation/                       # 評価フレームワーク
 │       ├── QualityEvaluation/            # 品質評価
 │       ├── FactChecking/                 # ファクトチェック
 │       └── TaskConstruction/             # タスク構築
-├── Sources/ResearchCLI/                  # CLIツール
-├── Tests/SwiftResearchTests/             # テストスイート
 └── samples/ResearchApp/                  # SwiftUI サンプルアプリ
 ```
 

@@ -1,12 +1,12 @@
 import Foundation
 import SwiftAgent
 
-/// Configuration for the crawler.
+/// Configuration for search behavior.
 ///
-/// Contains crawler-specific settings like search engine and domain filtering.
+/// Contains search-specific settings like search engine and domain filtering.
 /// LLM configuration is handled externally via LanguageModelSession.
 @Contextable
-public struct CrawlerConfiguration: Sendable {
+public struct SearchConfiguration: Sendable {
     /// The search engine to use for keyword searches.
     public let searchEngine: SearchEngine
 
@@ -30,7 +30,7 @@ public struct CrawlerConfiguration: Sendable {
     /// rather than SWIFT financial network.
     public let domainContext: String?
 
-    /// Creates a new crawler configuration.
+    /// Creates a new search configuration.
     ///
     /// - Parameters:
     ///   - searchEngine: The search engine to use. Defaults to DuckDuckGo.
@@ -56,10 +56,10 @@ public struct CrawlerConfiguration: Sendable {
     }
 
     /// The default configuration.
-    public static let `default` = CrawlerConfiguration()
+    public static let `default` = SearchConfiguration()
 
     /// The default value for Contextable conformance.
-    public static var defaultValue: CrawlerConfiguration { .default }
+    public static var defaultValue: SearchConfiguration { .default }
 }
 
 /// Supported search engines for keyword searches.

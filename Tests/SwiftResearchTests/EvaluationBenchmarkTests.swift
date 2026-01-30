@@ -73,8 +73,8 @@ struct EvaluationBenchmarkTests {
             )
         )
 
-        let crawlerConfig = CrawlerConfiguration(
-            researchConfiguration: ResearchConfiguration(llmSupportsConcurrency: true),
+        let searchConfig = SearchConfiguration(
+            researchConfiguration: ResearchConfiguration(),
             domainContext: persona.domain.domainDescription
         )
 
@@ -123,7 +123,7 @@ struct EvaluationBenchmarkTests {
         print("   Running fact checking...")
         let factCheckStep = FactCheckOrchestratorStep()
             .context(ModelContext(createModel()))
-            .context(crawlerConfig)
+            .context(searchConfig)
 
         let factCheckInput = FactCheckInput(
             researchOutput: researchResult.responseMarkdown,

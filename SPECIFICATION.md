@@ -302,7 +302,7 @@ public struct FinalResponseBuildingResponse: Sendable {
 ## 設定オプション
 
 ```swift
-public struct CrawlerConfiguration: Sendable {
+public struct SearchConfiguration: Sendable {
     let searchEngine: SearchEngine      // .duckDuckGo, .google, .bing
     let requestDelay: Duration          // デフォルト: .milliseconds(500)
     let modelName: String               // デフォルト: "gpt-oss:20b"
@@ -425,10 +425,10 @@ output responseMarkdown: 2500 chars
 
 ## エラーハンドリング
 
-### CrawlerError
+### SearchError
 
 ```swift
-public enum CrawlerError: Error, Sendable {
+public enum SearchError: Error, Sendable {
     case searchFailed(String)
     case fetchFailed(URL, String)
     case modelUnavailable
@@ -451,7 +451,7 @@ Sources/
 │   │   ├── CrawlCandidate.swift          # 優先度付き候補 + CrawlCandidateStack
 │   │   ├── CrawlContext.swift            # 並列クロール共有状態（NEW）
 │   │   ├── CrawledContent.swift          # クロール済みコンテンツ
-│   │   ├── CrawlerError.swift            # エラー定義
+│   │   ├── SearchError.swift            # エラー定義
 │   │   ├── CrawlerInput.swift            # 設定・入力モデル
 │   │   ├── CrawlerResult.swift           # 結果モデル（旧、参考用）
 │   │   └── StepModels.swift              # Step入出力モデル
