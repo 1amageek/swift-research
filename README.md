@@ -213,7 +213,6 @@ Tool arguments use `@Generable` macro with `@Guide(description:)` annotations, e
 
 - [SwiftAgent](https://github.com/1amageek/SwiftAgent) - Agent framework (Step, Tool, AgentSession)
 - [Remark](https://github.com/1amageek/Remark) - HTML to Markdown conversion and link extraction
-- [Selenops](https://github.com/1amageek/Selenops) - Search engine integration
 - [OpenFoundationModels-Ollama](https://github.com/1amageek/OpenFoundationModels-Ollama) - Ollama integration (optional)
 - [OpenFoundationModels-Claude](https://github.com/1amageek/OpenFoundationModels-Claude) - Claude API integration (optional)
 

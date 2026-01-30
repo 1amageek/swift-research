@@ -9,7 +9,7 @@ SwiftResearchは、LLMが自律的にToolを呼び出して情報収集・分析
 | ライブラリ | 役割 |
 |-----------|------|
 | **SwiftAgent** | エージェントフレームワーク（Step, Tool, AgentSession, @Generable, @Contextable） |
-| **RemarkKit** | HTML→Markdown変換、リンク抽出、Web検索結果パース |
+| **RemarkKit** | HTML→Markdown変換、リンク抽出 |
 | **OpenFoundationModels** | Apple FoundationModels バックエンド（デフォルト） |
 | **OpenFoundationModelsOllama** | Ollama バックエンド（`USE_OTHER_MODELS=1`時） |
 | **OpenFoundationModelsClaude** | Claude API バックエンド（`USE_OTHER_MODELS=1`時） |
