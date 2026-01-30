@@ -1,47 +1,37 @@
 # SwiftResearch
 
-An LLM-powered, objective-driven research assistant. Autonomously collects information based on user objectives and generates structured reports.
+An LLM-powered autonomous research library. The LLM autonomously calls tools to search, fetch, and evaluate web content, generating evidence-based answers to user queries.
 
 ## Features
 
-- **Objective-Driven**: Just input your goal, and the LLM plans the research strategy
-- **Autonomous Collection**: Automatically executes search, content review, and deep crawl decisions
-- **Adaptive Termination**: LLM evaluates information sufficiency and terminates at the right time
-- **Parallel Processing**: Multiple workers process URLs concurrently for faster results
-- **Knowledge Sharing**: Workers share discovered facts to avoid duplicate information extraction
-- **Domain Learning**: Automatically prioritizes domains that yield relevant content
+- **Agentic Architecture**: LLM autonomously decides which tools to call and when
+- **Autonomous Collection**: Automatically executes search, page fetching, and link following
+- **Semantic Termination**: LLM evaluates information sufficiency and terminates at the right time
+- **Parallel Fetching**: Multiple URLs are fetched concurrently via FetchToolWithLinks
+- **Structured Evaluation**: Dedicated evaluation tool with its own LLM session for reliable structured output
 
 ## Architecture
 
-Operates through a 5-phase orchestration flow with parallel processing:
+The LLM operates in an autonomous loop, calling tools as needed without explicit phase transitions:
 
 ```
-Phase 1: Objective Analysis
-    Analyze objective, generate search keywords and success criteria
-    ↓
-Phase 2: Search & Fetch
-    Search with keywords, retrieve URL list
-    ↓
-Phase 3: Parallel Content Review
-    ┌─────────────────────────────────────────┐
-    │  CrawlContext (Shared State)            │
-    │  - URL Queue (thread-safe)              │
-    │  - Known Facts (shared between workers) │
-    │  - Relevant Domains (learned)           │
-    └─────────────────────────────────────────┘
-         ↓           ↓           ↓           ↓
-    ┌────────┐  ┌────────┐  ┌────────┐  ┌────────┐
-    │Worker 0│  │Worker 1│  │Worker 2│  │Worker 3│
-    └────────┘  └────────┘  └────────┘  └────────┘
-    - Each worker: fetch → LLM review → add DeepCrawl URLs
-    - Share discovered facts to improve review accuracy
-    ↓
-Phase 4: Sufficiency Check
-    Evaluate if collected information meets the objective
-    Return to Phase 2 with additional keywords if insufficient
-    ↓
-Phase 5: Response Building
-    Synthesize collected information into final report
+ResearchAgent
+    │
+    ▼
+AgentSession(model, tools: [...])
+    │
+    ├── WebSearchTool           # Web search (DuckDuckGo)
+    ├── FetchToolWithLinks      # Page fetch + link extraction (parallel)
+    └── EvaluateSufficiencyTool # Sufficiency evaluation (own Session)
+
+LLM Autonomous Loop:
+    1. Understand  ── Analyze query
+    2. Search      ── Call WebSearchTool
+    3. Fetch       ── Call FetchToolWithLinks
+    4. Evaluate    ── Call EvaluateSufficiencyTool
+       ├─ Insufficient → Return to 2 or 3
+       └─ Sufficient   → Exit loop
+    5. Answer      ── Generate response from collected content
 ```
 
 ## Requirements
@@ -91,7 +81,7 @@ research
 |--------|-------------|---------|
 | `--limit <n>` | Maximum URLs to visit | 50 |
 | `--format <type>` | Output format (text / json) | text |
-| `--verbose` | Show detailed LLM I/O | false |
+| `--verbose` | Show detailed tool call info | false |
 | `--log <path>` | Log file path | none |
 | `--test-search` | Test search step only | false |
 | `--test-fetch` | Test fetch step only | false |
@@ -100,6 +90,7 @@ research
 
 | Option | Description | Default |
 |--------|-------------|---------|
+| `--claude` | Use Claude API | false |
 | `--model <name>` | Ollama model name | lfm2.5-thinking |
 | `--base-url <url>` | Ollama server URL | http://127.0.0.1:11434 |
 | `--timeout <sec>` | Request timeout | 300.0 |
@@ -122,23 +113,14 @@ import SwiftAgent
 
 let model = SystemLanguageModel()  // or OllamaLanguageModel
 
-let configuration = CrawlerConfiguration(
-    researchConfiguration: ResearchConfiguration(llmSupportsConcurrency: false)
-)
-
-let orchestrator = SearchOrchestratorStep(
+let agent = ResearchAgent(
     model: model,
-    configuration: configuration,
-    verbose: true
+    configuration: .init(maxURLs: 20)
 )
 
-let query = SearchQuery(
-    objective: "Features of OpenAI GPT-4.1",
-    maxVisitedURLs: 50
-)
-
-let result = try await orchestrator.run(query)
-print(result.responseMarkdown)
+let result = try await agent.research("Features of OpenAI GPT-4.1")
+print(result.answer)
+print("Sources: \(result.visitedURLs)")
 ```
 
 ## Build Options
@@ -157,6 +139,7 @@ USE_OTHER_MODELS=1 swift build
 
 | Suite | Purpose | Requirements |
 |-------|---------|--------------|
+| AgentToolTests | Unit tests for tools | None |
 | EvaluationModelTests | Unit tests for evaluation models | None |
 | PromptTendencyTests | LLM response tendency analysis | Ollama |
 | EvaluationBenchmarkTests | Quality & fact-check benchmarks | Ollama |
@@ -177,12 +160,6 @@ USE_OTHER_MODELS=1 swift test
 ## Evaluation Framework
 
 SwiftResearch includes a comprehensive evaluation framework for assessing research quality.
-
-### Components
-
-- **Quality Evaluation**: Scores research output across multiple dimensions
-- **Fact Checking**: Extracts verifiable statements and validates them against web sources
-- **Task Construction**: Generates evaluation tasks based on personas and domains
 
 ### Evaluation Pipeline
 
@@ -214,65 +191,31 @@ Research Execution
 | Quality | 88.0/100 | ≥60 |
 | Factual Accuracy | 100% | - |
 
-**Quality Dimensions**:
-
-| Dimension | Score |
-|-----------|-------|
-| Coverage | 5/10 |
-| Insight | 7/10 |
-| Instruction Following | 10/10 |
-| Clarity | 10/10 |
-| Technical Accuracy | 10/10 |
-| Source Diversity | 10/10 |
-
 ## Design Principles
 
-### Step-Based Modular Architecture
+### Agentic Architecture
 
-All components implement the `Step` protocol from [SwiftAgent](https://github.com/1amageek/SwiftAgent), enabling:
+The LLM autonomously decides the research strategy. There is no hardcoded orchestrator or phase transitions — the LLM reads its instructions and calls tools as needed.
 
-- **Composability**: Each Step can be used independently or combined into larger workflows
-- **Reusability**: Other agents can incorporate these Steps into their own pipelines
-- **Testability**: Individual Steps can be tested in isolation
-- **Extensibility**: Replace any Step with a custom implementation
+### Tool Pattern for Structured Output
 
-```swift
-// Each Step has typed Input and Output
-public struct SearchStep: Step {
-    typealias Input = KeywordSearchInput
-    typealias Output = [URL]
-}
+EvaluateSufficiencyTool creates its own LanguageModelSession internally, placing the JSON schema in Instructions rather than in conversation history. This significantly improves structured output reliability.
 
-public struct SearchOrchestratorStep: Step {
-    typealias Input = SearchQuery
-    typealias Output = AggregatedResult
-}
+### Semantic Termination
 
-// Compose Steps in your own agent
-let searchStep = SearchStep(searchEngine: .duckDuckGo)
-let urls = try await searchStep.run(KeywordSearchInput(keyword: "swift concurrency"))
-```
+Instead of fixed crawl limits, the LLM evaluates whether collected information is sufficient to answer the query. `maxURLs` serves as a safety limit to prevent runaway loops.
 
-### Structured vs Markdown
+### @Generable Schema Definition
 
-- **Structured (@Generable)**: Data for programmatic processing (bool flags, keyword arrays, link indices)
-- **Markdown**: Human-readable analysis text, summaries, review content
-
-### Parallel Processing with Shared Context
-
-Phase 3 uses multiple workers (default: 4) to process URLs concurrently:
-
-- **CrawlContext**: Thread-safe shared state using Mutex
-- **Known Facts Sharing**: Each worker sees facts discovered by others
-- **Domain Learning**: Tracks which domains yield relevant content
-- **Dynamic Queue**: Workers add DeepCrawl URLs to shared queue
+Tool arguments use `@Generable` macro with `@Guide(description:)` annotations, enabling the LLM to generate correctly formatted tool call arguments.
 
 ## Dependencies
 
-- [SwiftAgent](https://github.com/1amageek/SwiftAgent) - Agent framework
-- [OpenFoundationModels-Ollama](https://github.com/1amageek/OpenFoundationModels-Ollama) - Ollama integration
-- [Remark](https://github.com/1amageek/Remark) - Web page to Markdown conversion
+- [SwiftAgent](https://github.com/1amageek/SwiftAgent) - Agent framework (Step, Tool, AgentSession)
+- [Remark](https://github.com/1amageek/Remark) - HTML to Markdown conversion and link extraction
 - [Selenops](https://github.com/1amageek/Selenops) - Search engine integration
+- [OpenFoundationModels-Ollama](https://github.com/1amageek/OpenFoundationModels-Ollama) - Ollama integration (optional)
+- [OpenFoundationModels-Claude](https://github.com/1amageek/OpenFoundationModels-Claude) - Claude API integration (optional)
 
 ## License
 
